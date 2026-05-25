@@ -1,0 +1,33 @@
+# --- Odoo source ---
+# Tracked: only the Makefile. Everything else is provided by cloning Odoo.
+/odoo/*
+!/odoo/Makefile
+
+# --- Custom addons ---
+# Tracked: only the README. The addons live in their own repository.
+/custom-addons/*
+!/custom-addons/README.md
+
+# --- Local config ---
+config/odoo.config
+
+# --- Project notes / scratch ---
+AGENTS.md
+UI.md
+itlingo-cloud/
+
+# --- Python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+*.swp
