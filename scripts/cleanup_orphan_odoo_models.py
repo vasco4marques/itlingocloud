@@ -8,6 +8,18 @@ Run through Odoo shell:
 
 The default is a rollback-only preview. Set
 ``ITLINGO_ORPHAN_CLEANUP_APPLY=1`` to commit the cleanup.
+
+Production (run from /opt/odoo on the Docker host):
+
+    sudo docker exec -i itlingo-odoo \
+      odoo shell -c /etc/odoo/odoo.conf -d itlingo_cloud --no-http \
+      < scripts/cleanup_orphan_odoo_models.py
+
+After reviewing the dry-run counts, apply with:
+
+    sudo docker exec -e ITLINGO_ORPHAN_CLEANUP_APPLY=1 -i itlingo-odoo \
+      odoo shell -c /etc/odoo/odoo.conf -d itlingo_cloud --no-http \
+      < scripts/cleanup_orphan_odoo_models.py
 """
 
 import os
