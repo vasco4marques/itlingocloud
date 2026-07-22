@@ -1,0 +1,4 @@
+*
+!custom-addons
+custom-addons/**/__pycache__
+custom-addons/itlingo_dsl/services_compiler/node_modules
