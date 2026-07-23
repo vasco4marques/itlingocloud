@@ -1,0 +1,21 @@
+# Production compose file — deployed to /opt/odoo on the droplet.
+# Uses host networking so the container reaches the host Postgres on
+# 127.0.0.1:5432 and nginx keeps proxying to 127.0.0.1:8069 unchanged.
+services:
+  odoo:
+    image: vasco4marques/itlingo-odoo:${ODOO_TAG:-latest}
+    container_name: itlingo-odoo
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    # UID:GID of the host "odoo" user, so the container can reuse the
+    # existing filestore at /var/lib/odoo
+    user: "110:114"
+    environment:
+      HOST: 127.0.0.1
+      PORT: "5432"
+      USER: ${DB_USER}
+      PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - /var/lib/odoo:/var/lib/odoo
+      - ./odoo.docker.conf:/etc/odoo/odoo.conf:ro

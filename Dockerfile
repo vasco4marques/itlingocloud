@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim AS services-compiler-deps
+FROM node:22-bookworm-slim AS services-compiler-deps
 
 WORKDIR /services-compiler
 COPY custom-addons/itlingo_dsl/services_compiler/package.json \
@@ -26,7 +26,8 @@ COPY --from=services-compiler-deps --chown=odoo:odoo \
      /services-compiler/node_modules \
      /mnt/extra-addons/itlingo_dsl/services_compiler/node_modules
 # Langium 4.3.1 pulls Chevrotain 12, whose runtime requires Node 22. Keep the
-# parser subprocess independent from the Node version in the Odoo base image.
+# compiler smoke-load and parser subprocesses independent from the Node version
+# in the Odoo base image.
 COPY --from=templating-parser-deps /usr/local/bin/node /usr/local/bin/node
 COPY --from=templating-parser-deps --chown=odoo:odoo \
      /templating-parser/node_modules \
