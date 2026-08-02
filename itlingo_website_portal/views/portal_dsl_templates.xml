@@ -316,6 +316,7 @@
                         <p class="text-muted small text-uppercase fw-semibold mb-3">Lifecycle &amp; publication</p>
                         <t t-set="status_badges" t-value="{'draft': 'info', 'active': 'success', 'deprecated': 'warning'}"/>
                         <t t-set="lifecycle_grammar" t-value="dsl.file_ids.filtered(lambda f: f.file_type == 'grammar')"/>
+                        <t t-set="lifecycle_services" t-value="dsl.file_ids.filtered(lambda f: f.file_type == 'services')"/>
                         <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
                             <span t-attf-class="badge text-capitalize bg-#{status_badges.get(dsl.status, 'secondary')}">
                                 <t t-out="dsl.status"/>
@@ -337,13 +338,38 @@
                                       class="badge bg-warning text-dark">Validation outdated</span>
                                 <span t-else="" class="badge bg-secondary">Not validated</span>
                             </t>
+                            <t t-if="lifecycle_services">
+                                <t t-set="lifecycle_services_entry" t-value="lifecycle_services.filtered(lambda f: f.is_entry)"/>
+                                <span class="badge bg-light text-dark">
+                                    <t t-out="len(lifecycle_services)"/>
+                                    <t t-out="'services file' if len(lifecycle_services) == 1 else 'services files'"/>
+                                </span>
+                                <small t-if="lifecycle_services_entry" class="text-muted">
+                                    Services entry: <code t-out="lifecycle_services_entry.relative_path"/>
+                                </small>
+                                <span t-if="dsl.services_compile_result == 'ok' and dsl.services_compile_is_current"
+                                      class="badge bg-success">Services compiled</span>
+                                <span t-elif="dsl.services_compile_result == 'error' and dsl.services_compile_is_current"
+                                      class="badge bg-danger">Services errors</span>
+                                <span t-elif="dsl.services_compile_result"
+                                      class="badge bg-warning text-dark">Services compilation outdated</span>
+                                <span t-else="" class="badge bg-secondary">Services not compiled</span>
+                            </t>
                             <small t-if="dsl.grammar_validation_time" class="text-muted">
                                 Last validated <t t-out="dsl.grammar_validation_time"/>
                                 (<t t-out="dsl.grammar_validator_version"/>)
                             </small>
+                            <small t-if="dsl.services_compile_time" class="text-muted">
+                                · Services last compiled <t t-out="dsl.services_compile_time"/>
+                            </small>
                             <small t-if="dsl.published_at" class="text-muted">
                                 · Published <t t-out="dsl.published_at"/> by <t t-out="dsl.published_by_id.name"/>
                             </small>
+                        </div>
+                        <div t-if="dsl.services_compile_result == 'error'" class="alert alert-danger py-2 px-3 small mb-3" role="alert">
+                            <b>Services compilation failed.</b>
+                            The DSL cannot be published until it compiles. Open the
+                            <a t-attf-href="/dsl/#{dsl.id}/grammar">Grammar Editor</a> to see the diagnostics.
                         </div>
                         <div class="d-flex flex-wrap align-items-center gap-2">
                             <form t-if="can_manage_dsls and dsl.status == 'draft'" t-attf-action="/dsl/#{dsl.id}/publish" method="post" class="d-inline">
@@ -505,6 +531,7 @@
                 <!-- Definition files -->
                 <t t-set="file_groups" t-value="[
                     {'type': 'grammar', 'label': 'Grammar', 'accept': '.langium', 'single': False, 'hint': 'A .langium workspace with one entry file and optional imported files.'},
+                    {'type': 'services', 'label': 'Services', 'accept': '.ts', 'single': False, 'hint': 'Optional TypeScript module with custom scoping, naming and validation.'},
                     {'type': 'validation', 'label': 'Validation Rules', 'accept': '', 'single': False, 'hint': 'Multiple files are concatenated for the knowledge base.'},
                     {'type': 'examples', 'label': 'Examples', 'accept': '', 'single': False, 'hint': 'Multiple files are concatenated for the knowledge base.'},
                     {'type': 'specification', 'label': 'Specifications', 'accept': '', 'single': False, 'hint': 'Each file is synced individually.'},
@@ -514,30 +541,31 @@
                         <p class="text-muted small text-uppercase fw-semibold mb-3">Definition files</p>
                         <t t-foreach="file_groups" t-as="grp">
                             <t t-set="grp_files" t-value="dsl.file_ids.filtered(lambda f: f.file_type == grp['type'])"/>
-                            <t t-set="grammar_entry" t-value="grp_files.filtered(lambda f: f.is_entry) if grp['type'] == 'grammar' else False"/>
+                            <t t-set="structural" t-value="grp['type'] in ('grammar', 'services')"/>
+                            <t t-set="entry_file" t-value="grp_files.filtered(lambda f: f.is_entry) if structural else False"/>
                             <div class="mb-4">
                                 <div class="d-flex align-items-center justify-content-between">
                                     <div>
                                         <h6 class="mb-1 d-inline-block"><t t-out="grp['label']"/></h6>
-                                        <span t-if="grp['type'] == 'grammar' and dsl.status != 'draft'"
+                                        <span t-if="structural and dsl.status != 'draft'"
                                               class="badge bg-secondary ms-2">Read-only</span>
-                                        <small t-if="grp['type'] == 'grammar' and grp_files"
+                                        <small t-if="structural and grp_files"
                                                class="text-muted ms-2">
                                             <t t-out="len(grp_files)"/>
                                             <t t-out="'file' if len(grp_files) == 1 else 'files'"/>
-                                            <t t-if="grammar_entry"> · Entry: <code t-out="grammar_entry.relative_path"/></t>
+                                            <t t-if="entry_file"> · Entry: <code t-out="entry_file.relative_path"/></t>
                                         </small>
                                     </div>
                                     <div class="d-flex align-items-center gap-2">
-                                        <a t-if="grp['type'] == 'grammar' and grp_files"
+                                        <a t-if="structural and grp_files"
                                            t-attf-href="/dsl/#{dsl.id}/grammar"
                                            class="btn btn-sm btn-primary">
                                             <i class="fa fa-pencil me-1"/>Open editor
                                         </a>
-                                        <a t-if="grp['type'] == 'grammar' and not grp_files and can_edit_grammar"
+                                        <a t-if="structural and not grp_files and can_edit_grammar"
                                            t-attf-href="/dsl/#{dsl.id}/grammar"
                                            class="btn btn-sm btn-primary">
-                                            <i class="fa fa-plus me-1"/>Create grammar
+                                            <i class="fa fa-plus me-1"/><t t-out="'Create grammar' if grp['type'] == 'grammar' else 'Add services'"/>
                                         </a>
                                         <small class="text-muted"><t t-out="grp['hint']"/></small>
                                     </div>
@@ -549,14 +577,14 @@
                                             <span>
                                                 <i class="fa fa-file-o me-2 text-muted"/>
                                                 <a t-attf-href="/dsl/#{dsl.id}/files/#{f.id}/download">
-                                                    <t t-out="f.relative_path if grp['type'] == 'grammar' else f.file_name"/>
+                                                    <t t-out="f.relative_path if structural else f.file_name"/>
                                                 </a>
-                                                <span t-if="grp['type'] == 'grammar' and f.is_entry"
+                                                <span t-if="structural and f.is_entry"
                                                       class="badge bg-primary ms-2">Entry</span>
                                                 <span t-if="not f.is_enabled" class="badge bg-warning text-dark ms-2">Disabled</span>
                                             </span>
                                             <span class="text-nowrap">
-                                                <form t-if="grp['type'] != 'grammar'"
+                                                <form t-if="not structural"
                                                       t-attf-action="/dsl/#{dsl.id}/files/#{f.id}/toggle" method="post" class="d-inline">
                                                     <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
                                                     <button type="submit" class="btn btn-sm btn-link p-1"
@@ -564,7 +592,7 @@
                                                         <i t-attf-class="fa #{'fa-toggle-on text-success' if f.is_enabled else 'fa-toggle-off text-muted'} fa-lg"/>
                                                     </button>
                                                 </form>
-                                                <form t-if="grp['type'] != 'grammar'"
+                                                <form t-if="not structural"
                                                       t-attf-action="/dsl/#{dsl.id}/files/#{f.id}/delete" method="post" class="d-inline">
                                                     <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
                                                     <button type="submit" class="btn btn-sm btn-link text-danger p-1" title="Delete file"
@@ -576,7 +604,7 @@
                                         </li>
                                     </ul>
                                 </t>
-                                <t t-if="not (grp['single'] and grp_files) and (grp['type'] != 'grammar' or can_edit_grammar)">
+                                <t t-if="not (grp['single'] and grp_files) and (not structural or can_edit_grammar)">
                                     <form t-attf-action="/dsl/#{dsl.id}/files/add" method="post"
                                           enctype="multipart/form-data" class="d-flex flex-wrap align-items-center gap-2">
                                         <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
@@ -588,8 +616,8 @@
                                         </button>
                                     </form>
                                 </t>
-                                <t t-if="grp['type'] == 'grammar' and grp_files and can_edit_grammar">
-                                    <small class="text-muted">Manage paths, entry selection, and imported files in the Grammar Editor.</small>
+                                <t t-if="structural and grp_files and can_edit_grammar">
+                                    <small class="text-muted">Manage paths, entry selection and imported files in the Grammar Editor.</small>
                                 </t>
                             </div>
                         </t>

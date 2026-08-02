@@ -140,6 +140,175 @@ class TestDslGrammarPortal(HttpCase):
         )
         self.assertIn('active', breadcrumbs[-1].get('class', '').split())
 
+    def _file_group(self, response, label):
+        """Return the single ``file_groups`` block rendered for ``label``."""
+        document = html.fromstring(response.content)
+        groups = document.xpath(
+            f"//h6[normalize-space()='{label}']"
+            "/ancestor::div[contains(concat(' ', normalize-space(@class), ' '),"
+            " ' mb-4 ')][1]"
+        )
+        self.assertEqual(len(groups), 1, f'Expected one {label} file group.')
+        return groups[0]
+
+    @patch(
+        'odoo.addons.itlingo_dsl.services.services_compiler.compile_services'
+    )
+    def test_dsl_detail_lists_services_files(self, compile_services):
+        compile_services.return_value = {
+            'ok': True,
+            'js': 'export default function() { return {}; }',
+            'diagnostics': [],
+            'compiler_version': 'test',
+        }
+        services = self.env['itlingo.dsl.file']._create_services_text(
+            self.draft,
+            'services.ts',
+            'export default function() { return {}; }\n',
+        )
+
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        response = self.url_open(f'/dsl/{self.draft.id}')
+        services_group = self._file_group(response, 'Services')
+
+        self.assertIn(services.relative_path, services_group.text_content())
+        self.assertIn('Entry', services_group.text_content())
+        self.assertIn(self.grammar.relative_path, response.text)
+        self.assertTrue(
+            services_group.xpath(f".//a[@href='/dsl/{self.draft.id}/grammar']")
+        )
+        self.assertEqual(
+            services_group.xpath(".//input[@name='file_type']/@value"),
+            ['services'],
+        )
+        self.assertEqual(
+            services_group.xpath(".//input[@name='file']/@accept"),
+            ['.ts'],
+        )
+        self.assertFalse(
+            services_group.xpath(
+                f".//form[contains(@action, '/files/{services.id}/toggle')]"
+            )
+        )
+        self.assertFalse(
+            services_group.xpath(
+                f".//form[contains(@action, '/files/{services.id}/delete')]"
+            )
+        )
+
+    @patch(
+        'odoo.addons.itlingo_dsl.services.services_compiler.compile_services'
+    )
+    def test_dsl_detail_shows_services_compile_state(self, compile_services):
+        error_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Services Compile Error',
+            'acronym': 'SCE',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        compile_services.return_value = {
+            'ok': False,
+            'js': '',
+            'diagnostics': [{
+                'severity': 'error',
+                'message': 'Services compiler failure',
+                'path': 'services.ts',
+                'line': 1,
+                'column': 1,
+                'code': 'services-test',
+            }],
+            'compiler_version': 'test',
+        }
+        self.env['itlingo.dsl.file']._create_services_text(
+            error_dsl,
+            'services.ts',
+            'export default function() { return {}; }\n',
+        )
+
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        error_response = self.url_open(f'/dsl/{error_dsl.id}')
+        self.assertIn('Services errors', error_response.text)
+        self.assertIn('Services compilation failed.', error_response.text)
+
+        compile_services.return_value = {
+            'ok': True,
+            'js': 'export default function() { return {}; }',
+            'diagnostics': [],
+            'compiler_version': 'test',
+        }
+        ok_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Services Compile OK',
+            'acronym': 'SCO',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.env['itlingo.dsl.file']._create_services_text(
+            ok_dsl,
+            'services.ts',
+            'export default function() { return {}; }\n',
+        )
+        ok_response = self.url_open(f'/dsl/{ok_dsl.id}')
+        self.assertEqual(
+            len(html.fromstring(ok_response.content).xpath(
+                "//span[contains(@class, 'badge')]"
+                "[normalize-space()='Services compiled']"
+            )),
+            1,
+        )
+
+        no_services_dsl = self.env['itlingo.dsl'].create({
+            'name': 'No Services',
+            'acronym': 'NSV',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        no_services_response = self.url_open(f'/dsl/{no_services_dsl.id}')
+        self.assertNotIn('Services errors', no_services_response.text)
+        self.assertNotIn('Services compiled', no_services_response.text)
+        self.assertNotIn('Services not compiled', no_services_response.text)
+
+    @patch(
+        'odoo.addons.itlingo_dsl.services.services_compiler.compile_services'
+    )
+    def test_services_upload_from_detail_page(self, compile_services):
+        compile_services.return_value = {
+            'ok': True,
+            'js': 'export default function() { return {}; }',
+            'diagnostics': [],
+            'compiler_version': 'test',
+        }
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        form_page = self.url_open(f'/dsl/{self.draft.id}')
+        upload_form = self._file_group(form_page, 'Services').xpath(
+            ".//form[contains(@action, '/files/add')]"
+        )
+        self.assertEqual(len(upload_form), 1)
+        csrf_token = upload_form[0].xpath(".//input[@name='csrf_token']/@value")
+
+        uploaded = self.url_open(
+            f'/dsl/{self.draft.id}/files/add',
+            data={'csrf_token': csrf_token[0], 'file_type': 'services'},
+            files={'file': (
+                'services.ts',
+                b'export default function() { return {}; }\n',
+                'text/plain',
+            )},
+        )
+
+        self.assertEqual(uploaded.status_code, 200)
+        created = self.draft.file_ids.filtered(
+            lambda f: f.file_type == 'services'
+        )
+        self.assertEqual(created.relative_path, 'services.ts')
+        self.assertTrue(created.is_entry)
+        self.assertIn(
+            'services.ts',
+            self._file_group(uploaded, 'Services').text_content(),
+        )
+
     def test_language_service_diagnostics_and_restart_in_browser(self):
         browser_dsl = self.env['itlingo.dsl'].create({
             'name': 'Grammar Browser Smoke',

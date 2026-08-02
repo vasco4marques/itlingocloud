@@ -166,6 +166,13 @@ class ItlingoDsl(models.Model):
         copy=False,
     )
 
+    services_compile_is_current = fields.Boolean(
+        string="Services Compilation Is Current",
+        compute="_compute_services_compile_is_current",
+        help="True when the stored compilation result matches the current "
+             "services workspace digest.",
+    )
+
     # ------------------------------------------------------------------
     # Grammar validation and publication audit (Phase 5 lifecycle)
     # ------------------------------------------------------------------
@@ -558,6 +565,20 @@ class ItlingoDsl(models.Model):
                 digest
                 and dsl.grammar_validation_result
                 and dsl.grammar_validation_digest == digest
+            )
+
+    @api.depends(
+        "file_ids.file", "file_ids.file_type", "file_ids.relative_path",
+        "file_ids.is_entry",
+        "services_compile_result", "services_source_digest",
+    )
+    def _compute_services_compile_is_current(self):
+        for dsl in self:
+            digest = dsl._services_source_digest()
+            dsl.services_compile_is_current = bool(
+                digest
+                and dsl.services_compile_result
+                and dsl.services_source_digest == digest
             )
 
     def _run_grammar_validation(self):
