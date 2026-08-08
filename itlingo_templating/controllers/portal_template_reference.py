@@ -1,27 +1,18 @@
 """Public and maintainer-facing DSL Template Reference pages."""
 
-import os
 import re
 
 from odoo import http
 from odoo.http import content_disposition, request
 
-from odoo.addons.itlingo_documents.constants import (
-    SUPPORTED_TEMPLATE_ACCEPT,
-    SUPPORTED_TEMPLATE_EXTENSIONS,
-)
+from odoo.addons.itlingo_documents.constants import SUPPORTED_TEMPLATE_ACCEPT
 from odoo.addons.itlingo_website_portal.controllers.dsl import ITLingoDslPortal
-from odoo.addons.itlingo_templating.services import template_linter
+from odoo.addons.itlingo_templating.services import rendering, template_linter
 from odoo.addons.itlingo_templating.services.starter_template import (
     build_starter_template,
 )
 
-
 MAX_TEMPLATE_CHECK_BYTES = 5 * 1024 * 1024
-SUPPORTED_TEMPLATE_FORMATS = {
-    extension.lstrip(".") for extension in SUPPORTED_TEMPLATE_EXTENSIONS
-}
-
 
 def _snippet(type_name, alias=None):
     collection = alias or 'by_type["%s"]' % type_name
@@ -151,15 +142,18 @@ class ItlingoTemplateReferencePortal(http.Controller):
             template_bytes = pasted_template.encode("utf-8")
             template_format = "txt"
         elif upload and upload.filename:
-            template_format = os.path.splitext(upload.filename)[1].lower().lstrip(".")
-            if template_format not in SUPPORTED_TEMPLATE_FORMATS:
+            template_bytes = upload.read(MAX_TEMPLATE_CHECK_BYTES + 1)
+            template_format = rendering.template_format(
+                upload.filename, template_bytes,
+            )
+            if not template_format:
                 return self._render_detail(
                     dsl,
                     check_error=(
-                        "Unsupported template format. Upload DOCX, XLSX, or a supported text template."
+                        "Unsupported template format. Upload DOCX, XLSX, "
+                        "or a UTF-8 text template."
                     ),
                 )
-            template_bytes = upload.read(MAX_TEMPLATE_CHECK_BYTES + 1)
         else:
             return self._render_detail(
                 dsl,

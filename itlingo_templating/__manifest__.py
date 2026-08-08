@@ -1,14 +1,15 @@
 {
     'name': 'ITLingo Templating',
-    'version': '19.0.1.5.0',
+    'version': '19.0.1.7.0',
     'category': 'Services',
-    'summary': 'Generate office and text documents from any published DSL',
+    'summary': 'Generate office and text documents, single or multi-file, from any published DSL',
     'description': """
 Turn a DOCX, XLSX, or UTF-8 text template plus an uploaded DSL specification
 into a generated document. The specification is parsed locally (embedded
 Langium parser, no dependency on the chatbot/ITOI services), normalized into a
 canonical model and rendered with docxtpl (DOCX), openpyxl + Jinja2 (XLSX), or
-Jinja2 directly (text formats).
+Jinja2 directly (text formats). A text template may declare several fixed
+output files with {# output: ... #} fences and download them as one ZIP.
     """,
     'author': 'ITLingo',
     'website': 'https://itlingo.ist.utl.pt',

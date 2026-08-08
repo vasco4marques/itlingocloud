@@ -814,7 +814,7 @@
                 <div class="card border-0 shadow-sm rounded-3 mt-4">
                     <div class="card-header bg-white border-0 p-3">
                         <h5 class="fw-semibold mb-0">
-                            Organization documents (<t t-out="organization_document_count"/>)
+                            Organization documents (<t t-out="'%d' % (organization_document_count or 0)"/>)
                         </h5>
                     </div>
                     <div t-if="organization_documents" class="card-body p-0 table-responsive">

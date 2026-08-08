@@ -32,23 +32,24 @@ class TestUnifiedTemplateModel(TransactionCase):
                 "document_type_id": self.template_type.id,
             })
 
-    def test_template_rejects_unsupported_file_format(self):
-        with self.assertRaisesRegex(ValidationError, "format is not supported"):
+    def test_template_rejects_binary_file_with_arbitrary_extension(self):
+        with self.assertRaisesRegex(ValidationError, "UTF-8 text files"):
             self.env["itlingo.document"].create({
                 "name": "Unsupported Template",
                 "document_type_id": self.template_type.id,
                 "dsl_id": self.dsl.id,
-                "file_name": "template.pdf",
-                "document_file": base64.b64encode(b"not a template"),
+                "file_name": "template.custom",
+                "document_file": base64.b64encode(b"\xff\xfe\x00"),
             })
 
-    def test_template_accepts_supported_file_format(self):
+    def test_template_accepts_any_utf8_text_extension(self):
         document = self.env["itlingo.document"].create({
-            "name": "Supported Template",
+            "name": "Python Template",
             "document_type_id": self.template_type.id,
             "dsl_id": self.dsl.id,
-            "file_name": "template.md",
+            "file_name": "template.py",
             "document_file": base64.b64encode(b"# {{ specification.name }}"),
         })
 
         self.assertTrue(document.is_template)
+        self.assertTrue(document.template_format_supported)

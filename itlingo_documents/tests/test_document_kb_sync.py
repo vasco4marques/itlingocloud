@@ -1,9 +1,32 @@
 import base64
 import unittest
 
+from psycopg2 import IntegrityError
+
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase, tagged
 
+
+@tagged('post_install', '-at_install')
+class TestDocumentOwnership(TransactionCase):
+
+    def setUp(self):
+        super().setUp()
+        self.organization = self.env['itlingo.organization'].create({
+            'name': 'Document Ownership Test Org',
+        })
+        self.workspace = self.env['itlingo.workspace'].create({
+            'name': 'Document Ownership Test Workspace',
+            'organization_id': self.organization.id,
+        })
+
+    def test_document_rejects_dual_ownership(self):
+        with self.assertRaises(IntegrityError), self.env.cr.savepoint():
+            self.env['itlingo.document'].create({
+                'name': 'Dual-Owned Document',
+                'project_id': self.workspace.id,
+                'organization_id': self.organization.id,
+            })
 
 @tagged('post_install', '-at_install')
 class TestDocumentFormat(TransactionCase):
@@ -56,7 +79,6 @@ class TestDocumentKbSync(TransactionCase):
         doc = self.env['itlingo.document'].create({
             'name': 'Grounding Source',
             'document_type_id': self.doc_type.id,
-            'organization_id': self.org.id,
             'project_id': self.workspace.id,
             'file_name': 'grounding_source.txt',
             'document_file': base64.b64encode(b'Glossary term: actor'),
@@ -85,7 +107,6 @@ class TestDocumentKbSync(TransactionCase):
             self.env['itlingo.document'].create({
                 'name': 'Binary Source',
                 'document_type_id': self.doc_type.id,
-                'organization_id': self.org.id,
                 'project_id': self.workspace.id,
                 'file_name': 'binary_source.docx',
                 'document_file': base64.b64encode(b'PK\x03\x04binary'),
@@ -104,7 +125,6 @@ class TestDocumentKbSync(TransactionCase):
         doc = self.env['itlingo.document'].create({
             'name': 'Dynamic DSL Source',
             'document_type_id': self.doc_type.id,
-            'organization_id': self.org.id,
             'project_id': self.workspace.id,
             'file_name': 'dynamic_source.kxt',
             'document_file': base64.b64encode(b'entity Dynamic'),

@@ -5,11 +5,25 @@ partial specifications still produce a document.
 """
 
 import json
+import os
 import re
 
-from odoo.addons.itlingo_documents.constants import (
-    SUPPORTED_TEMPLATE_EXTENSIONS,
-)
+
+OFFICE_TEMPLATE_FORMATS = frozenset({"docx", "xlsx"})
+
+
+def template_format(filename, content):
+    """Return an Office format or any extension whose content is UTF-8 text."""
+    extension = os.path.splitext(filename or "")[1].lower().lstrip(".")
+    if not extension:
+        return None
+    if extension in OFFICE_TEMPLATE_FORMATS:
+        return extension
+    try:
+        content.decode("utf-8")
+    except (AttributeError, UnicodeDecodeError):
+        return None
+    return extension if b"\x00" not in content else None
 
 
 def lenient_env():
@@ -44,12 +58,7 @@ def lenient_env():
 
 
 def render_filename(pattern, context, fallback, extension):
-    """Render an output filename from a Jinja2 *pattern*.
-
-    Falls back to *fallback* when the pattern is empty or invalid, then forces
-    *extension* (e.g. ".xlsx"): a wrong office extension is replaced rather than
-    stacked, so ``foo.docx`` becomes ``foo.xlsx`` instead of ``foo.docx.xlsx``.
-    """
+    """Render a safe output filename and force the template's extension."""
     name = ""
     if pattern:
         try:
@@ -57,12 +66,7 @@ def render_filename(pattern, context, fallback, extension):
         except Exception:
             name = ""
     name = name or fallback
-    lower = name.lower()
-    if not lower.endswith(extension):
-        for ext in SUPPORTED_TEMPLATE_EXTENSIONS:
-            if lower.endswith(ext):
-                name = name[: -len(ext)]
-                break
-        name = "%s%s" % (name, extension)
-    # Strip path separators / unsafe characters from the final filename.
+    if not name.lower().endswith(extension):
+        stem, current_extension = os.path.splitext(name)
+        name = "%s%s" % (stem if current_extension else name, extension)
     return re.sub(r"[\\/:*?\"<>|]+", "_", name)

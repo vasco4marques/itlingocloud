@@ -1,5 +1,6 @@
 import base64
 import logging
+import mimetypes
 import os
 
 from odoo import _, http
@@ -8,8 +9,8 @@ from odoo.http import content_disposition, request
 from odoo.addons.itlingo_website_portal.controllers.portal import ITLingoPortal
 
 from odoo.addons.itlingo_templating.services import (
-    canonical_model, docx_renderer, rendering, template_linter, text_renderer,
-    xlsx_renderer,
+    canonical_model, docx_renderer, multi_output, rendering, template_linter,
+    text_renderer, xlsx_renderer,
 )
 from odoo.addons.itlingo_templating.services.dsl_parser import (
     DslParseError,
@@ -137,9 +138,9 @@ class ItlingoTemplatingPortal(http.Controller):
 
     @staticmethod
     def _template_format(document):
-        """Return the supported format for a template file, else None."""
-        ext = os.path.splitext(document.file_name or "")[1].lower().lstrip(".")
-        return ext if ext in _FORMATS else None
+        """Return the Office format or UTF-8 text file extension."""
+        content = base64.b64decode(document.document_file or b"")
+        return rendering.template_format(document.file_name, content)
 
     @staticmethod
     def _source_extensions(document):
@@ -308,9 +309,36 @@ class ItlingoTemplatingPortal(http.Controller):
 
         context = self._build_context(document.dsl_id, ast)
 
-        renderer, mime = _FORMATS[fmt]
+        # Extra variables available only to output filenames.
+        template_name = os.path.splitext(document.file_name or document.name or "template")[0]
+        spec_name = os.path.splitext(upload.filename or "spec")[0]
+        filename_context = dict(
+            context, template_name=template_name, spec_name=spec_name,
+        )
+        fallback = document.name or "generated"
+
+        renderer, mime = _FORMATS.get(fmt, (
+            text_renderer.render_text,
+            "%s; charset=utf-8" % (
+                mimetypes.guess_type(document.file_name or "")[0] or "text/plain"
+            ),
+        ))
         try:
             template_bytes = base64.b64decode(document.document_file)
+            outputs = None if fmt in ("docx", "xlsx") else (
+                multi_output.render_outputs(template_bytes, filename_context)
+            )
+            if outputs is not None:
+                archive = multi_output.build_zip(outputs)
+                archive_name = rendering.render_filename(
+                    document.output_filename_pattern, filename_context,
+                    fallback, extension=".zip",
+                )
+                return request.make_response(archive, headers=[
+                    ("Content-Type", "application/zip"),
+                    ("Content-Disposition", content_disposition(archive_name)),
+                    ("Content-Length", str(len(archive))),
+                ])
             output = renderer(template_bytes, context)
         except UnicodeDecodeError:
             return self._render_detail(
@@ -332,13 +360,6 @@ class ItlingoTemplatingPortal(http.Controller):
                 error=_("Document generation failed: %s") % err,
             )
 
-        # Extra variables available only to the output filename pattern.
-        template_name = os.path.splitext(document.file_name or document.name or "template")[0]
-        spec_name = os.path.splitext(upload.filename or "spec")[0]
-        filename_context = dict(
-            context, template_name=template_name, spec_name=spec_name,
-        )
-        fallback = document.name or "generated"
         filename = rendering.render_filename(
             document.output_filename_pattern, filename_context, fallback,
             extension="." + fmt,

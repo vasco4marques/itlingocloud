@@ -191,3 +191,98 @@ class TestTemplateLinter(BaseCase):
         clean_document.save(clean_output)
         clean_extracted = extract_template_sources(clean_output.getvalue(), "docx")
         self.assertFalse(clean_extracted["findings"])
+
+    def test_valid_bundle_fences_are_clean(self):
+        result = lint_template(
+            b"{# output: {{ spec_name }}_model.py #}\n"
+            b"class {{ root.name }}:\n"
+            b"    pass\n"
+            b"{# endoutput #}\n"
+            b"\n"
+            b"{# output: {{ spec_name }}_schema.sql #}\n"
+            b"CREATE TABLE {{ root.name }} (id INTEGER PRIMARY KEY);\n"
+            b"{# endoutput #}\n",
+            "txt", REFERENCE,
+        )
+        self.assertFalse(result["findings"])
+
+    def test_malformed_bundle_structure_is_a_structure_finding(self):
+        for source in (
+            b"{# output: a.py #}\nx\n",
+            b"{# endoutput #}\n",
+            b"{# output: a.py #}\nx\n{# endoutput #}\nstray text\n",
+            b"{# output a.py #}\nx\n{# endoutput #}\n",
+        ):
+            result = lint_template(source, "txt", REFERENCE)
+            self.assertEqual(
+                [(item["category"], item["severity"])
+                 for item in result["findings"]],
+                [("structure", "error")],
+                source,
+            )
+
+    def test_unsafe_literal_member_names_warn_but_dynamic_names_do_not(self):
+        for source, expected in (
+            (b"{# output: sub/dir.py #}\n{# endoutput #}\n", "plain file name"),
+            (b"{# output: a.py #}\n{# endoutput #}\n"
+             b"{# output: A.py #}\n{# endoutput #}\n", "Duplicate"),
+        ):
+            result = lint_template(source, "txt", REFERENCE)
+            self.assertEqual(
+                [(item["category"], item["severity"])
+                 for item in result["findings"]],
+                [("structure", "warning")],
+                source,
+            )
+            self.assertIn(expected, result["findings"][0]["message"])
+
+        # Same literal tail, different variables: not a duplicate.
+        dynamic = lint_template(
+            b"{# output: {{ spec_name }}_a.py #}\n{# endoutput #}\n"
+            b"{# output: {{ template_name }}_a.py #}\n{# endoutput #}\n",
+            "txt", REFERENCE,
+        )
+        self.assertFalse(dynamic["findings"])
+
+    def test_empty_literal_member_name_is_reported(self):
+        result = lint_template(
+            b"{# output: #}\n{# endoutput #}\n", "txt", REFERENCE,
+        )
+        self.assertEqual(
+            [(item["category"], item["severity"])
+             for item in result["findings"]],
+            [("structure", "warning")],
+        )
+        self.assertIn("filename", result["findings"][0]["message"])
+
+    def test_marker_free_text_is_unaffected_by_bundle_checks(self):
+        result = lint_template(
+            b"{{ root.name }}\nprefix {# output: not standalone #} tail\n",
+            "txt", REFERENCE,
+        )
+        self.assertFalse(result["findings"])
+
+    def test_no_docx_filename_suggestion_remains(self):
+        import pathlib
+
+        from odoo.addons.itlingo_templating.services import template_linter
+
+        module = pathlib.Path(template_linter.__file__).parents[1]
+        view = (module / "views" / "itlingo_document_views.xml").read_text()
+        model = (module / "models" / "itlingo_document.py").read_text()
+        self.assertIn(
+            'placeholder="{{ spec_name }}_{{ template_name }}"', view,
+        )
+        self.assertNotIn("_{{ template_name }}.docx", view)
+        self.assertNotIn("{{ template_name }}.docx", model)
+
+    def test_linter_uses_only_public_multi_output_api(self):
+        import pathlib
+
+        from odoo.addons.itlingo_templating.services import template_linter
+
+        source = pathlib.Path(template_linter.__file__).read_text()
+        self.assertIn("validate_output_template", source)
+        self.assertNotIn("_split_blocks", source)
+        self.assertNotIn("_validate_name", source)
+        self.assertNotIn("_CANDIDATE", source)

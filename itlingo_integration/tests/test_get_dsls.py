@@ -88,7 +88,6 @@ class TestGetDsls(HttpCase):
         cls.workspace_source = cls.env["itlingo.document"].create({
             "name": "Billing ASL",
             "document_type_id": doc_type.id,
-            "organization_id": cls.organization.id,
             "project_id": cls.workspace.id,
             "dsl_id": cls.dsl.id,
             "file_name": "billing.imf",

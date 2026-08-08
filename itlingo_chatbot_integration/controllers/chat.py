@@ -444,7 +444,6 @@ class ChatController(http.Controller):
             'file_name': final_name,
             'document_file': base64.b64encode(content.encode('utf-8')),
             'project_id': project.id,
-            'organization_id': project.organization_id.id if project.organization_id else False,
             'creator_id': user.id,
             'status': 'draft',
         })

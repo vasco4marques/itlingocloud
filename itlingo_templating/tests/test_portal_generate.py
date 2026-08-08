@@ -1,6 +1,8 @@
 import base64
+import io
 import json
 import re
+import zipfile
 
 from odoo.tests import HttpCase, tagged
 from odoo.tests.common import new_test_user
@@ -63,8 +65,8 @@ class TestPortalGenerate(HttpCase):
                 "itlingo_documents.doc_type_template"
             ).id,
             "dsl_id": cls.dsl.id,
-            "document_file": base64.b64encode(b"{{ specification.name }}"),
-            "file_name": "requirements.txt",
+            "document_file": base64.b64encode(b"{{ root.name }}"),
+            "file_name": "requirements.py",
             "status": "published",
             "creator_id": cls.portal_user.id,
         })
@@ -116,6 +118,23 @@ class TestPortalGenerate(HttpCase):
             response.text,
         )
 
+    def test_bundle_guidance_hidden_only_for_office_attachments(self):
+        guidance = "Producing several files from one text template"
+        for file_name, expected in (
+            ("report.docx", False),
+            ("report.xlsx", False),
+            ("REPORT.DOCX", False),
+            ("REPORT.XLSX", False),
+            ("relatório.txt", True),
+            ("requirements.py", True),
+        ):
+            self.document.file_name = file_name
+            self.env.flush_all()
+            response = self.url_open(self.detail_url)
+
+            self.assertEqual(response.status_code, 200, file_name)
+            self.assertEqual(guidance in response.text, expected, file_name)
+
     def test_generation_error_stays_in_document_detail(self):
         detail_response = self.url_open(self.detail_url)
         csrf_token = re.search(
@@ -131,6 +150,31 @@ class TestPortalGenerate(HttpCase):
         self.assertIn("Please upload a TSL specification file.", response.text)
         self.assertIn("Template information", response.text)
         self.assertIn("Documents", response.text)
+
+    def test_generates_arbitrary_utf8_extension(self):
+        detail_response = self.url_open(self.detail_url)
+        csrf_token = re.search(
+            r'name="csrf_token" value="([^"]+)"', detail_response.text,
+        ).group(1)
+
+        response = self.url_open(
+            self.detail_url + "/generate",
+            data={"csrf_token": csrf_token},
+            files={
+                "source_file": (
+                    "demo.tsl",
+                    b"specification demo requirement first",
+                    "text/plain",
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"demo")
+        self.assertEqual(
+            response.headers["Content-Type"], "text/x-python; charset=utf-8",
+        )
+        self.assertIn(".py", response.headers["Content-Disposition"])
 
     def test_legacy_generate_get_redirects_to_detail(self):
         response = self.url_open(
@@ -194,3 +238,64 @@ class TestPortalGenerate(HttpCase):
         )
 
         self.assertEqual(output, b"TSL:first")
+
+    def _post_generate(self, source=b"specification demo requirement first"):
+        csrf_token = re.search(
+            r'name="csrf_token" value="([^"]+)"',
+            self.url_open(self.detail_url).text,
+        ).group(1)
+        return self.url_open(
+            self.detail_url + "/generate",
+            data={"csrf_token": csrf_token},
+            files={"source_file": ("demo.tsl", source, "text/plain")},
+        )
+
+    def test_bundle_template_downloads_named_zip_with_mixed_members(self):
+        self.document.document_file = base64.b64encode(
+            b"{# output: {{ spec_name }}_model.py #}\n"
+            b"class {{ root.name }}:\n"
+            b"    pass\n"
+            b"{# endoutput #}\n"
+            b"{# output: {{ root.name }}_schema.sql #}\n"
+            b"CREATE TABLE {{ root.name }} (id INTEGER PRIMARY KEY);\n"
+            b"{# endoutput #}\n"
+        )
+        self.document.output_filename_pattern = (
+            "{{ spec_name }}_{{ template_name }}"
+        )
+
+        response = self._post_generate()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "application/zip")
+        self.assertIn(
+            "demo_requirements.zip", response.headers["Content-Disposition"],
+        )
+        self.assertEqual(
+            int(response.headers["Content-Length"]), len(response.content),
+        )
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            self.assertEqual(
+                archive.namelist(), ["demo_model.py", "demo_schema.sql"],
+            )
+            self.assertEqual(
+                archive.read("demo_model.py"), b"class demo:\n    pass\n",
+            )
+            self.assertEqual(
+                archive.read("demo_schema.sql"),
+                b"CREATE TABLE demo (id INTEGER PRIMARY KEY);\n",
+            )
+
+    def test_bundle_failure_returns_detail_error_not_partial_zip(self):
+        self.document.document_file = base64.b64encode(
+            b"{# output: a.py #}\nx\n{# endoutput #}\n"
+            b"{# output: A.PY #}\ny\n{# endoutput #}\n"
+        )
+
+        response = self._post_generate()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotEqual(
+            response.headers["Content-Type"], "application/zip",
+        )
+        self.assertIn("Document generation failed", response.text)

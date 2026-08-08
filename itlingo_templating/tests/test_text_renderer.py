@@ -1,6 +1,9 @@
 import unittest
 
-from odoo.addons.itlingo_templating.services.rendering import render_filename
+from odoo.addons.itlingo_templating.services.rendering import (
+    render_filename,
+    template_format,
+)
 from odoo.addons.itlingo_templating.services.text_renderer import render_text
 
 
@@ -29,8 +32,22 @@ class TestTextRenderer(unittest.TestCase):
             output.decode("utf-8"),
             '{"known": "value", "missing": null}',
         )
+    def test_accepts_any_utf8_text_extension(self):
+        self.assertEqual(template_format("model.py", b"class Model:\n    pass\n"), "py")
+        self.assertEqual(template_format("main.go", b"package main\n"), "go")
 
-    def test_filename_replaces_any_supported_template_extension(self):
-        filename = render_filename("output.docx", {}, "generated", ".json")
+    def test_rejects_binary_or_extensionless_templates(self):
+        self.assertIsNone(template_format("payload.bin", b"\xff\xfe"))
+        self.assertIsNone(template_format("payload.bin", b"text\x00data"))
+        self.assertIsNone(template_format("README", b"UTF-8 text"))
 
-        self.assertEqual(filename, "output.json")
+    def test_accepts_office_formats_for_specialized_renderers(self):
+        self.assertEqual(template_format("report.docx", b"PK\x03\x04"), "docx")
+        self.assertEqual(template_format("report.xlsx", b"PK\x03\x04"), "xlsx")
+
+
+    def test_filename_replaces_existing_extension(self):
+        self.assertEqual(
+            render_filename("output.custom", {}, "generated", ".py"),
+            "output.py",
+        )

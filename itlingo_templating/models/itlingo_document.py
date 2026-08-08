@@ -1,3 +1,5 @@
+import base64
+
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
@@ -5,9 +7,7 @@ from odoo.addons.itlingo_templating.services.dsl_parser import (
     dsl_label,
     is_templatable_dsl,
 )
-from odoo.addons.itlingo_templating.services.rendering import (
-    SUPPORTED_TEMPLATE_EXTENSIONS,
-)
+from odoo.addons.itlingo_templating.services.rendering import template_format
 
 TEMPLATE_TYPE_CODE = "template"
 
@@ -25,10 +25,13 @@ class ItlingoDocument(models.Model):
     )
     output_filename_pattern = fields.Char(
         string="Output Filename Pattern",
-        help="Jinja2 pattern for the generated filename. Available variables: "
+        help="Jinja2 pattern for the download name. Available variables: "
              "template_name (this template's name) and spec_name (uploaded "
              "specification name). DSL-specific template fields may also be "
-             "used. Example: {{ spec_name }}_{{ template_name }}.docx. "
+             "used. Example: {{ spec_name }}_{{ template_name }}. Do not add "
+             "an extension: generation appends the attached template's own "
+             "extension, or .zip for a multi-output text template, whose "
+             "member names come from its {# output: ... #} headers. "
              "Defaults to the template name.",
     )
     template_generation_supported = fields.Boolean(
@@ -64,11 +67,16 @@ class ItlingoDocument(models.Model):
                 doc.env, doc.dsl_id,
             )
 
-    @api.depends("file_name")
+    def _uploaded_template_format(self):
+        self.ensure_one()
+        content = base64.b64decode(self.document_file or b"")
+        return template_format(self.file_name, content)
+
+    @api.depends("file_name", "document_file")
     def _compute_template_format_supported(self):
         for doc in self:
-            doc.template_format_supported = (doc.file_name or "").lower().endswith(
-                SUPPORTED_TEMPLATE_EXTENSIONS
+            doc.template_format_supported = bool(
+                doc.document_file and doc._uploaded_template_format()
             )
 
     @api.depends("dsl_id", "dsl_id.file_extensions")
@@ -97,7 +105,9 @@ class ItlingoDocument(models.Model):
                 doc.dsl_id._templating_variable_groups() if doc.dsl_id else {}
             )
 
-    @api.constrains("document_type_id", "dsl_knowledge", "dsl_id")
+    @api.constrains(
+        "document_type_id", "dsl_knowledge", "dsl_id", "document_file", "file_name",
+    )
     def _check_template_not_knowledge(self):
         for doc in self:
             if doc.is_template and not doc.dsl_id:
@@ -108,12 +118,10 @@ class ItlingoDocument(models.Model):
             if (
                 doc.is_template
                 and doc.document_file
-                and not (doc.file_name or "").lower().endswith(
-                    SUPPORTED_TEMPLATE_EXTENSIONS
-                )
+                and not doc._uploaded_template_format()
             ):
                 raise ValidationError(_(
-                    "The template file format is not supported "
+                    "Templates must be DOCX, XLSX, or UTF-8 text files "
                     "(document: %s).", doc.name,
                 ))
             if doc.is_template and doc.dsl_knowledge:

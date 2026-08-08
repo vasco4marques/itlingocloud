@@ -333,9 +333,9 @@ class TestPortalTemplateReference(HttpCase):
             data={"csrf_token": token},
             files={
                 "template_file": (
-                    "template.md",
+                    "template.py",
                     b"{{ elemnts }}",
-                    "text/plain",
+                    "text/x-python",
                 ),
             },
         )

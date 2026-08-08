@@ -875,7 +875,10 @@ class ITLingoPortal(CustomerPortal):
     _DOC_EDIT_ORG_ROLES = ('org_manager', 'doc_manager')
 
     def _portal_org_document_domain(self, org_id, user_role):
-        domain = [('organization_id', '=', org_id)]
+        domain = [
+            ('organization_id', '=', org_id),
+            ('project_id', '=', False),
+        ]
         if user_role.role not in self._DOC_EDIT_ORG_ROLES:
             domain.append(('status', '=', 'published'))
         return domain
@@ -943,6 +946,7 @@ class ITLingoPortal(CustomerPortal):
         if (
             not org
             or not doc.exists()
+            or doc.project_id
             or doc.organization_id.id != org.id
             or doc.status != 'published'
         ):
@@ -955,6 +959,7 @@ class ITLingoPortal(CustomerPortal):
         doc = request.env['itlingo.document'].sudo().browse(document_id)
         if (
             not doc.exists()
+            or doc.project_id
             or doc.organization_id.id != org_id
             or (
                 user_role.role not in self._DOC_EDIT_ORG_ROLES
@@ -3034,6 +3039,7 @@ class ITLingoPortal(CustomerPortal):
             org_documents_ctx = self._portal_documents_list_ctx(
                 [
                     ('organization_id', '=', project.organization_id.id),
+                    ('project_id', '=', False),
                     ('status', '=', 'published'),
                 ],
                 params,

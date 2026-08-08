@@ -17,13 +17,12 @@ template .docx/.xlsx or UTF-8 text file (itlingo.document, type = Document Templ
 ## Usage
 
 Set an `itlingo.document`'s **Document Type** to **Document Template**, associate
-it with a DSL, and give it a supported template file. Every DSL must be active
-and have a current, valid grammar published through the grammar editor.
-Supported formats are `.docx`, `.xlsx`, and UTF-8 text formats including `.txt`,
-`.md`, `.rst`, `.html`, `.htm`, `.json`, `.xml`, `.yaml`, `.yml`, `.toml`,
-`.ini`, `.cfg`, `.properties`, `.sql`, `.csv`, `.tsv`, `.css`, `.js`, `.ts`,
-and `.sh`.
-Text templates are rendered as UTF-8 using Jinja2 directly.
+it with a DSL, and upload a `.docx`, `.xlsx`, or text file with any extension.
+Every DSL must be active and have a current, valid grammar published through
+the grammar editor. Non-Office templates are accepted when their bytes are
+valid UTF-8 text without NUL characters, then rendered directly with Jinja2.
+This includes source formats such as `.py`, `.java`, `.go`, `.rs`, and any
+project-specific text extension without maintaining an extension allowlist.
 `is_template` is derived from that type. An optional output filename pattern
 appears for template documents in the create/edit forms.
 
@@ -83,8 +82,8 @@ configured aliases visible instead of returning an error page.
 
 ## Advisory template checking
 
-`services/template_linter.py` extracts Jinja from DOCX, XLSX, and supported
-UTF-8 text formats and checks it against `_template_reference_context()`. It
+`services/template_linter.py` extracts Jinja from DOCX, XLSX, and any valid
+UTF-8 text template and checks it against `_template_reference_context()`. It
 reports unknown top-level variables, invalid literal `by_type['Type']` keys,
 and conservative possible field typos for loops bound to one known type. Close
 matches are included as suggestions. Findings never block generation; an
@@ -138,6 +137,44 @@ References resolve to the target element, so navigate them directly:
 
 `by_id` (id -> element) is still available for lookups by name string, and
 `by_id[uc.primaryActor]` also works.
+
+## Several output files from one text template
+
+A UTF-8 text template may declare fixed output files with standalone
+`{# output: <filename> #}` / `{# endoutput #}` comment lines. Each filename and
+body is rendered from the same specification context and the response is one
+ZIP archive. One `.txt` template producing a `.py` and a `.sql` file:
+
+```
+{# output: {{ spec_name }}_model.py #}
+class {{ root.name }}:
+    pass
+{# endoutput #}
+
+{# output: {{ spec_name }}_schema.sql #}
+CREATE TABLE {{ root.name }} (id INTEGER PRIMARY KEY);
+{# endoutput #}
+```
+
+Filename semantics: `output_filename_pattern` names the single generated file
+in the ordinary (fence-free) mode, and names the downloaded ZIP when fences are
+present; the `{# output: ... #}` headers name the archive members. The pattern
+needs no extension - generation forces the attached template's own extension,
+or `.zip` in bundle mode. Member names must be plain file names (no path
+separators, no `: * ? " < > |`, no control characters, at most 255 bytes) and
+unique case-insensitively; conflicting names are rejected rather than
+silently merged.
+
+Limits and non-goals: text outputs only - DOCX and XLSX templates keep their
+existing single-output renderers and binary members are not generated; the set
+of files is fixed at authoring time (no per-element file loops); content
+outside the fences must be whitespace only; fences do not nest; and generated
+archives are transient, never stored. A template with no fences behaves exactly
+as before.
+
+`Check template` reports malformed fences and unsafe literal member names as
+advisory `structure` findings. Names built from variables are validated during
+generation, where the real context exists.
 
 ## Setup
 

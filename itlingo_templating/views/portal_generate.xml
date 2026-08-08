@@ -157,6 +157,39 @@
                                     </p>
                                 </div>
                             </details>
+                            <details class="mt-3" t-if="not (document.file_name or '').lower().endswith(('.docx', '.xlsx'))">
+                                <summary class="fw-semibold">Producing several files from one text template</summary>
+                                <div class="small text-muted mt-2">
+                                    <p class="mb-2">
+                                        A UTF-8 text template may declare fixed output files with standalone
+                                        <code>{# output: ... #}</code> / <code>{# endoutput #}</code> comment lines.
+                                        Every file is rendered from the same specification and the browser downloads
+                                        one ZIP archive. A template without these fences keeps downloading a single file.
+                                    </p>
+                                    <pre class="bg-light border rounded p-2 mb-2">{# output: {{ spec_name }}_model.py #}
+class {{ root.name }}:
+    pass
+{# endoutput #}
+
+{# output: {{ spec_name }}_schema.sql #}
+CREATE TABLE {{ root.name }} (id INTEGER PRIMARY KEY);
+{# endoutput #}</pre>
+                                    <p class="mb-2">
+                                        Saved as one <code>.txt</code> template, this produces a <code>.py</code> file and a
+                                        <code>.sql</code> file inside the archive.
+                                    </p>
+                                    <p class="mb-2">
+                                        Filenames: the template's Output Filename Pattern names the single generated file,
+                                        or the ZIP archive when fences are present; each <code>{# output: ... #}</code> header
+                                        names one member. Member names must be plain file names, unique, and non-empty.
+                                    </p>
+                                    <p class="mb-0">
+                                        Limits: text outputs only (DOCX and XLSX templates stay single-output), a fixed set of
+                                        files known at authoring time (no per-element file loops), everything outside the fences
+                                        must be blank, and nothing is stored server-side.
+                                    </p>
+                                </div>
+                            </details>
                         </form>
                     </div>
                 </div>

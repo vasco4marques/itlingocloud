@@ -1,5 +1,6 @@
 from . import test_text_renderer
 from . import test_canonical_model
+from . import test_multi_output
 from . import test_dsl_parser
 from . import test_portal_generate
 from . import test_portal_template_reference

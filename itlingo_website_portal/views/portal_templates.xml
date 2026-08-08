@@ -180,7 +180,7 @@
         </t>
         <div t-if="documents" class="card border-0 shadow-sm rounded-3">
             <div class="card-header bg-white border-0 p-3">
-                <h5 class="fw-semibold mb-0">Documents (<t t-out="doc_count"/>)</h5>
+                <h5 class="fw-semibold mb-0">Documents (<t t-out="'%d' % (doc_count or 0)"/>)</h5>
             </div>
             <div class="card-body p-0 table-responsive">
                 <table class="table table-hover mb-0">

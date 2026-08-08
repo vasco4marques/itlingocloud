@@ -10,10 +10,13 @@
                 <field name="is_template"/>
                 <field name="output_filename_pattern"
                        invisible="not is_template"
-                       placeholder="{{ spec_name }}_{{ template_name }}.docx"/>
+                       placeholder="{{ spec_name }}_{{ template_name }}"/>
                 <div class="text-muted" invisible="not is_template">
                     Universal variables: {{ spec_name }} and {{ template_name }}.
                     DSL-specific scalar fields from the selected template context may also be used.
+                    Leave the extension out: generation appends the attached template's own extension,
+                    or <code>.zip</code> when the text template declares several
+                    <code>{# output: ... #}</code> files, which name themselves.
                 </div>
             </field>
         </field>

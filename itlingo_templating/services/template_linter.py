@@ -6,6 +6,7 @@ import re
 import zipfile
 
 from .rendering import lenient_env
+from .multi_output import MultiOutputTemplateError, validate_output_template
 
 
 GENERIC_VARIABLES = {
@@ -136,12 +137,31 @@ def _xlsx_structure_findings(value, sheet_name, coordinate, column):
     )]
 
 
+def _bundle_structure_findings(template_bytes):
+    """Advisory structure checks for multi-output fences in text templates.
+
+    Only literal filename text is checked: names built from variables are
+    validated for real during generation, when the context exists.
+    """
+    try:
+        validate_output_template(template_bytes)
+    except UnicodeDecodeError:
+        return []
+    except MultiOutputTemplateError as error:
+        message = str(error)
+        severity = "warning" if message.startswith("Output ") else "error"
+        return [_finding(severity, "structure", message, "output")]
+    return []
+
+
 def lint_template(template_bytes, template_format, reference_context):
     """Return Jinja and, when available, DSL-inventory findings."""
     extracted = extract_template_sources(template_bytes, template_format)
     dsl_available = bool(reference_context and reference_context.get("success"))
     inventory = _inventory(reference_context) if dsl_available else None
     findings = list(extracted.get("findings", ()))
+    if (template_format or "").lower() not in ("docx", "xlsx"):
+        findings.extend(_bundle_structure_findings(template_bytes))
     if inventory:
         for name in sorted(extracted["top_level"]):
             _check_top_level(name, inventory, findings, None)

@@ -8,7 +8,7 @@
         <t t-if="template_type_id">
             <div id="doc_template_opts" class="mb-3" style="display:none;">
                 <div class="alert alert-info py-2">
-                    Templates require one DSL and a supported template file.
+                    Templates require one DSL and a DOCX, XLSX, or UTF-8 text file.
                 </div>
                 <label class="form-label" for="doc_output_pattern">Output filename pattern</label>
                 <input type="text" class="form-control" id="doc_output_pattern"

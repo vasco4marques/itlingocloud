@@ -66,6 +66,11 @@ class ItlingoDocument(models.Model):
         'itlingo.organization', string='Organization',
         tracking=True,
     )
+    _exclusive_ownership = models.Constraint(
+        'CHECK (project_id IS NULL OR organization_id IS NULL)',
+        'A document cannot belong to both a workspace and an organization.',
+    )
+
     creator_id = fields.Many2one(
         'res.users', string='Creator',
         default=lambda self: self.env.user, readonly=True,
