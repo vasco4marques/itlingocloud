@@ -10,8 +10,14 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { URI } from 'langium';
-import { createServicesForGrammar } from 'langium/grammar';
+import { EmptyFileSystem, URI } from 'langium';
+import {
+  collectAst,
+  collectTypeHierarchy,
+  createLangiumGrammarServices,
+  createServicesForGrammar,
+  mergeTypesAndInterfaces,
+} from 'langium/grammar';
 
 function loadGrammar(grammarPath, seen = new Set()) {
   const absolutePath = resolve(grammarPath);
@@ -34,6 +40,42 @@ function loadGrammar(grammarPath, seen = new Set()) {
     },
   );
   return [grammarWithoutImports, ...imports].join('\n');
+}
+
+async function parseGrammar(grammar) {
+  const grammarServices = createLangiumGrammarServices(EmptyFileSystem).grammar;
+  const document = grammarServices.shared.workspace.LangiumDocumentFactory.fromString(
+    grammar,
+    URI.parse('memory:/grammar.langium'),
+  );
+  await grammarServices.shared.workspace.DocumentBuilder.build(
+    [document],
+    { validation: false },
+  );
+  return {
+    grammarNode: document.parseResult.value,
+    grammarServices,
+  };
+}
+
+function repairNestedUnionReflection(parsedGrammar, reflection) {
+  const hierarchy = collectTypeHierarchy(
+    mergeTypesAndInterfaces(collectAst(parsedGrammar.grammarNode, {
+      services: parsedGrammar.grammarServices,
+    })),
+  );
+  for (const name of hierarchy.superTypes.keys()) {
+    if (!reflection.types[name]) {
+      reflection.types[name] = {
+        name,
+        properties: {},
+        superTypes: [...hierarchy.superTypes.get(name)],
+      };
+    }
+  }
+
+  reflection.subtypes = {};
+  reflection.allSubtypes = {};
 }
 
 function serializeValue(value, seen) {
@@ -176,10 +218,16 @@ async function main() {
   }
 
   try {
+    const parsedGrammar = await parseGrammar(grammar);
     const module = servicesModulePath
       ? await loadServicesModule(servicesModulePath)
       : undefined;
-    const services = await createServicesForGrammar({ grammar, module });
+    const services = await createServicesForGrammar({
+      grammar: parsedGrammar.grammarNode,
+      grammarServices: parsedGrammar.grammarServices,
+      module,
+    });
+    repairNestedUnionReflection(parsedGrammar, services.shared.AstReflection);
     const fileExtension = String(services.LanguageMetaData?.fileExtensions?.[0] || 'dsl').replace(/^\./, '');
     const factory = services.shared.workspace.LangiumDocumentFactory;
     const document = factory.fromString(dslText, URI.parse(`memory:///input.${fileExtension}`));

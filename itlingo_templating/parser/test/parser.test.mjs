@@ -55,6 +55,49 @@ function parseCrossFile(source) {
     }
 }
 
+function parseNestedUnion(source) {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'itlingo-parser-nested-union-test-'));
+    const sourcePath = path.join(workspace, 'source.nested-union');
+    writeFileSync(sourcePath, source, 'utf8');
+    try {
+        const proc = spawnSync(process.execPath, [
+            parserPath,
+            path.resolve('test/nested-union.langium'),
+            sourcePath,
+            'Nested union specification',
+            'all',
+        ], { encoding: 'utf8' });
+        return {
+            status: proc.status,
+            result: JSON.parse(proc.stdout),
+            stderr: proc.stderr,
+        };
+    } finally {
+        rmSync(workspace, { recursive: true, force: true });
+    }
+}
+
+test('nested union resolves concrete member references', () => {
+    const { status, result, stderr } = parseNestedUnion('target targetOne use targetOne');
+
+    assert.equal(status, 0, stderr || result.error);
+    assert.equal(result.success, true);
+    assert.deepEqual(result.ast.elements[1].target, { $ref: 'targetOne' });
+    assert.deepEqual(result.diagnostics, []);
+});
+
+test('nested union retains unresolved-reference diagnostics for typos', () => {
+    const { status, result } = parseNestedUnion('target targetOne use missingTarget');
+
+    assert.equal(status, 1);
+    assert.equal(result.success, false);
+    assert.ok(result.diagnostics.some(diagnostic =>
+        diagnostic.message.includes(
+            "Could not resolve reference to Outer named 'missingTarget'",
+        ),
+    ));
+});
+
 test('injected ScopeProvider resolves containment-qualified references', () => {
     const { status, result, stderr } = parse(
         'entity e_VAT { attribute VATValue } derived e_VAT.VATValue',
