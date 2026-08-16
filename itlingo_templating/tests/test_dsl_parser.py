@@ -1,10 +1,15 @@
 import hashlib
+import unittest
 
 from odoo.addons.itlingo_templating.services.dsl_parser import (
     DslParseError,
+    _attribute_diagnostics,
     parse_dsl,
 )
-from odoo.addons.itlingo_templating.services.spec_flattener import SpecSource
+from odoo.addons.itlingo_templating.services.spec_flattener import (
+    SpecSource,
+    flatten_spec,
+)
 from odoo.tests import BaseCase, tagged
 
 
@@ -205,6 +210,54 @@ export default () => ({ references: {
     ScopeProvider: services => new ImportScopes(services),
 }});
 """
+
+
+class TestDslParserHelpers(unittest.TestCase):
+    def test_flatten_spec_tracks_source_spans(self):
+        entry = SpecSource(
+            identifier="entry",
+            name="ordering.cat",
+            text=(
+                "Package p_Ordering\n"
+                "Import p_Billing.*\n"
+                "System Ordering\n"
+            ),
+        )
+        billing = SpecSource(
+            identifier="billing",
+            name="billing.cat",
+            text="Package p_Billing\nSystem Billing\n",
+        )
+
+        flattened = flatten_spec(entry.text, [billing], entry_name=entry.name)
+        lines = flattened.text.splitlines()
+
+        self.assertEqual(
+            flattened.spans,
+            [(1, "ordering.cat"), (5, "billing.cat")],
+        )
+        self.assertEqual(lines[flattened.spans[0][0] - 1], "Package p_Ordering")
+        self.assertEqual(lines[flattened.spans[1][0] - 1], "Package p_Billing")
+
+    def test_attribute_diagnostics_uses_source_spans(self):
+        diagnostics = [
+            {"severity": 1, "message": "entry", "line": 2},
+            {"severity": 1, "message": "import", "line": 7},
+            {"severity": 1, "message": "unknown", "line": None},
+        ]
+
+        attributed = _attribute_diagnostics(
+            diagnostics,
+            [(1, "ordering.cat"), (5, "billing.cat")],
+        )
+
+        self.assertEqual(attributed[0]["line"], 2)
+        self.assertEqual(attributed[0]["file"], "ordering.cat")
+        self.assertEqual(attributed[1]["line"], 3)
+        self.assertEqual(attributed[1]["file"], "billing.cat")
+        self.assertEqual(attributed[2], diagnostics[2])
+        self.assertIsNot(attributed, diagnostics)
+        self.assertIsNot(attributed[0], diagnostics[0])
 
 
 class _Params:

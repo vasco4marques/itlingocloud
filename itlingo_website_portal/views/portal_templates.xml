@@ -124,16 +124,16 @@
                     </div>
                     <div class="col-md-4 col-lg-2">
                         <t t-call="itlingo_website_portal.portal_filter_multiselect">
-                            <t t-set="ms_id" t-value="'doc_filter_dsl'"/>
-                            <t t-set="ms_label">DSL</t>
+                            <t t-set="ms_id" t-value="'doc_filter_dsl_family'"/>
+                            <t t-set="ms_label">DSL family</t>
                             <t t-set="ms_options" t-value="[
                                 {'name': 'no_dsl', 'value': '1', 'label': 'No DSL',
                                  'checked': doc_filters.get('no_dsl')},
                             ] + [
-                                {'name': 'dsl_id', 'value': d.id,
-                                 'label': '%s %s' % (d.acronym, d.version or ''),
-                                 'checked': d.id in (doc_filters.get('dsl_id') or [])}
-                                for d in dsls]"/>
+                                {'name': 'dsl_family_id', 'value': family.id,
+                                 'label': '%s - %s' % (family.acronym, family.name),
+                                 'checked': family.id in (doc_filters.get('dsl_family_id') or [])}
+                                for family in dsl_families]"/>
                         </t>
                     </div>
                     <div class="col-md-4 col-lg-2">
@@ -245,7 +245,13 @@
                             </td>
                             <td><t t-out="doc.document_type_id.name or '—'"/></td>
                             <td>
-                                <t t-if="doc.dsl_id" t-out="doc.dsl_id.acronym"/>
+                                <t t-if="doc.dsl_family_id">
+                                    <t t-out="doc.dsl_family_id.acronym"/>
+                                    <t t-if="doc.dsl_version_id">
+                                        (<t t-out="doc.dsl_version_id.version"/> -
+                                        <t t-out="dict(doc.dsl_version_id._fields['status'].selection).get(doc.dsl_version_id.status)"/>)
+                                    </t>
+                                </t>
                                 <t t-else="">—</t>
                             </td>
                             <td>

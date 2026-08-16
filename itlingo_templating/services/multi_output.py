@@ -14,7 +14,7 @@ import io
 import re
 import unicodedata
 import zipfile
-from .rendering import lenient_env
+from .rendering import lenient_env, render_best_effort
 
 
 class MultiOutputTemplateError(ValueError):
@@ -71,7 +71,7 @@ def _split_blocks(source):
     return blocks
 
 
-def _render(env, source, context, what):
+def _render(env, source, context, what, best_effort=False):
     if "\r\n" in source:
         env.newline_sequence = "\r\n"
     elif "\r" in source:
@@ -79,6 +79,11 @@ def _render(env, source, context, what):
     else:
         env.newline_sequence = "\n"
     try:
+        if best_effort:
+            rendered, _findings = render_best_effort(
+                source, context, env=env
+            )
+            return rendered
         return env.from_string(source).render(**context)
     except Exception as error:
         raise MultiOutputTemplateError(
@@ -171,7 +176,7 @@ def render_outputs(template_bytes, context):
             _render(env, name_template, context, "output %d filename" % index),
             seen,
         )
-        rendered = _render(env, body, context, "output %r" % name)
+        rendered = _render(env, body, context, "output %r" % name, True)
         outputs.append((name, rendered.encode("utf-8")))
     return outputs
 

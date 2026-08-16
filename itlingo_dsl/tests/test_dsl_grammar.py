@@ -127,7 +127,9 @@ class TestDslGrammar(TransactionCase):
         )
         # Deprecated exercises the non-draft guard without requiring the
         # publication path; activation itself is covered by the lifecycle tests.
-        self.dsl.status = 'deprecated'
+        self.dsl.with_context(
+            allow_dsl_lifecycle_write=True,
+        ).write({"status": "deprecated"})
 
         with self.assertRaisesRegex(ValidationError, 'draft status'):
             grammar._write_text_utf8('grammar Changed')
@@ -140,7 +142,9 @@ class TestDslGrammar(TransactionCase):
         services = self.File._create_services_text(
             self.dsl, 'services.ts', 'export default () => ({});\n',
         )
-        self.dsl.status = 'deprecated'
+        self.dsl.with_context(
+            allow_dsl_lifecycle_write=True,
+        ).write({"status": "deprecated"})
 
         with self.assertRaisesRegex(ValidationError, 'draft status'):
             services._write_text_utf8('export default () => ({ changed: true });')

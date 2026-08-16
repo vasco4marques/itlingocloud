@@ -1,4 +1,8 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_itlingo_dsl_family_member,itlingo.dsl.family member,model_itlingo_dsl_family,itlingo_organizations.group_itlingo_member,1,0,0,0
+access_itlingo_dsl_family_manager,itlingo.dsl.family manager,model_itlingo_dsl_family,itlingo_organizations.group_itlingo_manager,1,0,0,0
+access_itlingo_dsl_family_admin,itlingo.dsl.family admin,model_itlingo_dsl_family,itlingo_organizations.group_itlingo_admin,1,1,1,1
+access_itlingo_dsl_family_portal,itlingo.dsl.family portal,model_itlingo_dsl_family,base.group_portal,1,0,0,0
 access_itlingo_dsl_member,itlingo.dsl member,model_itlingo_dsl,itlingo_organizations.group_itlingo_member,1,0,0,0
 access_itlingo_dsl_manager,itlingo.dsl manager,model_itlingo_dsl,itlingo_organizations.group_itlingo_manager,1,0,0,0
 access_itlingo_dsl_admin,itlingo.dsl admin,model_itlingo_dsl,itlingo_organizations.group_itlingo_admin,1,1,1,1

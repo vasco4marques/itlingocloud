@@ -161,14 +161,8 @@
                         </div>
                         <div class="col-md-4">
                             <label class="form-label" for="dsl_status">Status</label>
-                            <select class="form-select" name="status" id="dsl_status">
-                                <t t-foreach="status_selection" t-as="opt">
-                                    <option t-att-value="opt[0]"
-                                            t-att-selected="(form.get('status') or 'draft') == opt[0]">
-                                        <t t-out="opt[1]"/>
-                                    </option>
-                                </t>
-                            </select>
+                            <span class="form-control-plaintext text-info">Draft</span>
+                            <input type="hidden" name="status" value="draft"/>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label" for="dsl_ext">File extensions</label>
@@ -278,6 +272,13 @@
 
                 <div t-if="dsl_message == 'created'" class="alert alert-success" role="alert">DSL created. You can now upload its definition files below.</div>
                 <div t-if="dsl_message == 'saved'" class="alert alert-success" role="alert">Changes saved.</div>
+                <div t-if="dsl_message == 'validated'" class="alert alert-success" role="alert">
+                    Draft grammar and services were validated without publishing.
+                </div>
+                <div t-if="dsl_error == 'validate_failed'" class="alert alert-danger" role="alert">
+                    <p class="mb-1 fw-semibold">Draft validation failed.</p>
+                    <pre t-if="validate_error" class="mb-0 small" style="white-space: pre-wrap;"><t t-out="validate_error"/></pre>
+                </div>
                 <div t-if="dsl_message == 'file_added'" class="alert alert-success" role="alert">File uploaded and pushed to the chatbot knowledge base.</div>
                 <div t-if="dsl_message == 'file_removed'" class="alert alert-success" role="alert">File removed.</div>
                 <div t-if="dsl_message == 'file_updated'" class="alert alert-success" role="alert">File updated.</div>
@@ -371,6 +372,15 @@
                             The DSL cannot be published until it compiles. Open the
                             <a t-attf-href="/dsl/#{dsl.id}/grammar">Grammar Editor</a> to see the diagnostics.
                         </div>
+                            <form t-if="can_validate_draft and dsl.status == 'draft'"
+                                  t-attf-action="/dsl/#{dsl.id}/validate-draft"
+                                  method="post" class="d-inline">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <button type="submit" class="btn btn-outline-info"
+                                        onclick="return confirm('Validate the current grammar and services without publishing this draft?');">
+                                    <i class="fa fa-check-circle me-1"/>Validate Draft
+                                </button>
+                            </form>
                         <div class="d-flex flex-wrap align-items-center gap-2">
                             <form t-if="can_manage_dsls and dsl.status == 'draft'" t-attf-action="/dsl/#{dsl.id}/publish" method="post" class="d-inline">
                                 <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
@@ -456,14 +466,11 @@
                                 </div>
                                 <div class="col-md-4">
                                     <label class="form-label" for="e_status">Status</label>
-                                    <select class="form-select" name="status" id="e_status">
-                                        <t t-set="cur_status" t-value="form.get('status') if form else dsl.status"/>
-                                        <t t-foreach="status_selection" t-as="opt">
-                                            <option t-att-value="opt[0]" t-att-selected="cur_status == opt[0]">
-                                                <t t-out="opt[1]"/>
-                                            </option>
-                                        </t>
-                                    </select>
+                                    <span class="form-control-plaintext text-info">
+                                        <t t-out="dict(dsl._fields['status'].selection).get(form.get('status') if form else dsl.status)"/>
+                                    </span>
+                                    <input type="hidden" name="status"
+                                           t-att-value="form.get('status') if form else dsl.status"/>
                                 </div>
                                 <div class="col-md-4">
                                     <label class="form-label" for="e_ext">File extensions</label>

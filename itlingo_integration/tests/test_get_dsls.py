@@ -2,7 +2,7 @@ import base64
 import hashlib
 import json
 
-from odoo.tests import HttpCase, tagged
+from odoo.tests import HttpCase, new_test_user, tagged
 
 
 @tagged("post_install", "-at_install")
@@ -11,12 +11,26 @@ class TestGetDsls(HttpCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        cls.source_user = new_test_user(
+            cls.env,
+            login='itoi_document_source_user',
+            password='itoi_document_source_user',
+            groups='base.group_user',
+        )
         cls.File = cls.env["itlingo.dsl.file"]
         cls.dsl = cls.env["itlingo.dsl"].create({
             "name": "ITOI multi-file grammar",
             "acronym": "ITOIMF",
             "version": "test-1",
             "status": "draft",
+            "file_extensions": ".imf",
+        })
+        cls.dsl_alt = cls.env["itlingo.dsl"].create({
+            "name": "ITOI multi-file grammar",
+            "acronym": "ITOIMF",
+            "version": "test-2",
+            "status": "draft",
+            "family_id": cls.dsl.family_id.id,
             "file_extensions": ".imf",
         })
         cls.File._create_grammar_text(
@@ -79,7 +93,7 @@ class TestGetDsls(HttpCase):
             "organization_id": cls.organization.id,
         })
         cls.env["itlingo.project.role"].create({
-            "user_id": cls.env.user.id,
+            "user_id": cls.source_user.id,
             "project_id": cls.workspace.id,
             "role": "ws_member",
             "state": "accepted",
@@ -89,7 +103,8 @@ class TestGetDsls(HttpCase):
             "name": "Billing ASL",
             "document_type_id": doc_type.id,
             "project_id": cls.workspace.id,
-            "dsl_id": cls.dsl.id,
+            "dsl_family_id": cls.dsl.family_id.id,
+            "dsl_version_id": cls.dsl.id,
             "file_name": "billing.imf",
             "document_file": base64.b64encode(
                 b"Package p_Billing System Billing"
@@ -99,10 +114,22 @@ class TestGetDsls(HttpCase):
             "name": "Shared ASL",
             "document_type_id": doc_type.id,
             "organization_id": cls.organization.id,
-            "dsl_id": cls.dsl.id,
+            "dsl_family_id": cls.dsl.family_id.id,
+            "dsl_version_id": cls.dsl.id,
             "file_name": "shared.imf",
             "document_file": base64.b64encode(
                 b"Package p_Shared System Shared"
+            ),
+        })
+        cls.organization_source_alt_version = cls.env["itlingo.document"].create({
+            "name": "Shared ASL alternate version",
+            "document_type_id": doc_type.id,
+            "organization_id": cls.organization.id,
+            "dsl_family_id": cls.dsl.family_id.id,
+            "dsl_version_id": cls.dsl_alt.id,
+            "file_name": "shared-alt.imf",
+            "document_file": base64.b64encode(
+                b"Package p_SharedAlt System SharedAlt"
             ),
         })
         foreign_org = cls.env["itlingo.organization"].create({
@@ -112,7 +139,8 @@ class TestGetDsls(HttpCase):
             "name": "Foreign ASL",
             "document_type_id": doc_type.id,
             "organization_id": foreign_org.id,
-            "dsl_id": cls.dsl.id,
+            "dsl_family_id": cls.dsl.family_id.id,
+            "dsl_version_id": cls.dsl.id,
             "file_name": "foreign.imf",
             "document_file": base64.b64encode(
                 b"Package p_Foreign System Foreign"
@@ -161,17 +189,18 @@ class TestGetDsls(HttpCase):
         response = self.url_open(
             "/token_api/get-dsl-sources/%s" % self.dsl.id,
             headers=self._authorization_headers({
-                "user": self.env.user.login,
+                "user": self.source_user.login,
                 "wsid": self.workspace.id,
             }),
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         payload = json.loads(response.text)
         source_ids = {item["id"] for item in payload["sources"]}
         self.assertEqual(source_ids, {
             self.workspace_source.id,
             self.organization_source.id,
+            self.organization_source_alt_version.id,
         })
         self.assertNotIn(self.foreign_source.id, source_ids)
         billing = next(

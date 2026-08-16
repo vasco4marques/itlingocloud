@@ -129,7 +129,9 @@ class TestDslLifecycle(TransactionCase):
 
     def test_dsl_without_grammar_can_activate_directly(self):
         dsl = self._make_draft('LCMETA', grammar=None)
-        dsl.status = 'active'
+        dsl.with_context(
+            allow_dsl_lifecycle_write=True,
+        ).write({"status": "active"})
         self.assertEqual(dsl.status, 'active')
 
     def test_create_draft_version_copies_without_modifying_source(self):

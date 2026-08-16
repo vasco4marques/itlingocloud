@@ -8,7 +8,7 @@
         <t t-if="template_type_id">
             <div id="doc_template_opts" class="mb-3" style="display:none;">
                 <div class="alert alert-info py-2">
-                    Templates require one DSL and a DOCX, XLSX, or UTF-8 text file.
+                    Templates require one DSL family and a DOCX, XLSX, or UTF-8 text file.
                 </div>
                 <label class="form-label" for="doc_output_pattern">Output filename pattern</label>
                 <input type="text" class="form-control" id="doc_output_pattern"
@@ -28,7 +28,7 @@
                 (function(){
                     var sel = document.querySelector('select[name=document_type_id]');
                     var opts = document.getElementById('doc_template_opts');
-                    var dsl = document.querySelector('select[name=dsl_id]');
+                    var family = document.querySelector('select[name=dsl_family_id]');
                     var files = document.querySelectorAll('input[type=file][name=document_file]');
                     var tplId = '<t t-esc="template_type_id"/>';
                     var templateAccept = '<t t-esc="template_file_accept"/>';
@@ -36,7 +36,7 @@
                         if(sel &amp;&amp; opts){
                             var isTemplate = String(sel.value) === tplId;
                             opts.style.display = isTemplate ? '' : 'none';
-                            if(dsl){ dsl.required = isTemplate; }
+                            if(family){ family.required = isTemplate; }
                             files.forEach(function(file){
                                 if(!file.dataset.originalAccept){
                                     file.dataset.originalAccept = file.getAttribute('accept') || '';
@@ -52,11 +52,11 @@
         </t>
     </template>
 
-    <!-- Language + DSL selects shared by the document create/edit forms.
-         Expects `form`, `dsls` and `doc_language_selection` in context. -->
+    <!-- Language + DSL family/version selects shared by the document create/edit forms.
+         Expects `form`, `dsl_families`, `dsl_versions` and `doc_language_selection` in context. -->
     <template id="portal_document_meta_fields" name="Document Language/DSL Fields">
         <div class="row">
-            <div class="mb-3 col-md-6">
+            <div class="mb-3 col-md-4">
                 <label class="form-label" for="doc_meta_language">Language</label>
                 <select class="form-select" id="doc_meta_language" name="language">
                     <option value="">—</option>
@@ -68,19 +68,50 @@
                     </t>
                 </select>
             </div>
-            <div class="mb-3 col-md-6">
-                <label class="form-label" for="doc_meta_dsl">DSL</label>
-                <select class="form-select" id="doc_meta_dsl" name="dsl_id">
+            <div class="mb-3 col-md-4">
+                <label class="form-label" for="doc_meta_dsl_family">DSL family</label>
+                <select class="form-select" id="doc_meta_dsl_family" name="dsl_family_id">
                     <option value="">—</option>
-                    <t t-foreach="dsls" t-as="dsl_rec">
+                    <t t-foreach="dsl_families" t-as="family">
+                        <option t-att-value="family.id"
+                                t-att-selected="str(form.get('dsl_family_id') or '') == str(family.id)">
+                            <t t-out="family.acronym"/>
+                            <t t-if="family.name"> - <t t-out="family.name"/></t>
+                        </option>
+                    </t>
+                </select>
+            </div>
+            <div class="mb-3 col-md-4">
+                <label class="form-label" for="doc_meta_dsl_version">DSL version</label>
+                <select class="form-select" id="doc_meta_dsl_version" name="dsl_version_id">
+                    <option value="">—</option>
+                    <t t-foreach="dsl_versions" t-as="dsl_rec">
                         <option t-att-value="dsl_rec.id"
-                                t-att-selected="str(form.get('dsl_id') or '') == str(dsl_rec.id)">
-                            <t t-out="dsl_rec.acronym"/> <t t-out="dsl_rec.version"/>
+                                t-att-data-family-id="dsl_rec.family_id.id"
+                                t-att-selected="str(form.get('dsl_version_id') or '') == str(dsl_rec.id)">
+                            <t t-out="dsl_rec.version"/> - <t t-out="dict(dsl_rec._fields['status'].selection).get(dsl_rec.status)"/>
                         </option>
                     </t>
                 </select>
             </div>
         </div>
+        <script type="text/javascript">
+            (function(){
+                var family = document.querySelector('select[name=dsl_family_id]');
+                var version = document.querySelector('select[name=dsl_version_id]');
+                if(!family || !version){ return; }
+                function sync(){
+                    var familyId = String(family.value || '');
+                    Array.prototype.forEach.call(version.options, function(option){
+                        var visible = !option.value || option.getAttribute('data-family-id') === familyId;
+                        option.hidden = !visible;
+                        if(!visible &amp;&amp; option.selected){ option.selected = false; }
+                    });
+                }
+                family.addEventListener('change', sync);
+                sync();
+            })();
+        </script>
     </template>
 
     <!-- Document detail (scoped under a workspace or organization).
@@ -142,9 +173,17 @@
                                 <dd><t t-out="document.organization_id.name or 'N/A'"/></dd>
                                 <dt>Document Type</dt>
                                 <dd><t t-out="document.document_type_id.name or 'N/A'"/></dd>
-                                <dt>DSL</dt>
+                                <dt>DSL family</dt>
                                 <dd>
-                                    <t t-if="document.dsl_id" t-out="document.dsl_id.acronym"/>
+                                    <t t-if="document.dsl_family_id" t-out="document.dsl_family_id.acronym"/>
+                                    <t t-else="">—</t>
+                                </dd>
+                                <dt>DSL version</dt>
+                                <dd>
+                                    <t t-if="document.dsl_version_id">
+                                        <t t-out="document.dsl_version_id.version"/> -
+                                        <t t-out="dict(document.dsl_version_id._fields['status'].selection).get(document.dsl_version_id.status)"/>
+                                    </t>
                                     <t t-else="">—</t>
                                 </dd>
                                 <dt>Grounding knowledge</dt>

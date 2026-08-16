@@ -11,6 +11,28 @@
         </xpath>
         <xpath expr="//div[hasclass('card')][1]" position="after">
             <t t-if="document.is_template">
+                <t t-set="generation_context"
+                   t-value="document.with_user(request.env.user)._templating_generation_context()"/>
+                <t t-set="generation_active_target"
+                   t-value="generation_context['generation_active_target']"/>
+                <t t-set="generation_target"
+                   t-value="generation_context['generation_target']"/>
+                <t t-set="generation_target_choices"
+                   t-value="generation_context['generation_target_choices']"/>
+                <t t-set="generation_target_can_select"
+                   t-value="generation_context['generation_target_can_select']"/>
+                <t t-set="generation_target_label"
+                   t-value="generation_context['generation_target_label']"/>
+                <t t-set="generation_authored_version_label"
+                   t-value="generation_context['generation_authored_version_label']"/>
+                <t t-set="generation_target_supported"
+                   t-value="generation_context['generation_target_supported']"/>
+                <t t-set="generation_source_label"
+                   t-value="generation_context['generation_source_label']"/>
+                <t t-set="generation_source_accept"
+                   t-value="generation_context['generation_source_accept']"/>
+                <t t-set="generation_variable_groups"
+                   t-value="generation_context['generation_variable_groups']"/>
                 <div id="generate" class="card border-0 shadow-sm rounded-3">
                     <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2 p-3">
                         <div>
@@ -18,8 +40,11 @@
                             <span class="text-muted small">Template</span>
                         </div>
                         <div class="d-flex align-items-center gap-2">
-                            <span t-if="document.dsl_id" class="badge bg-light text-dark border">
-                                <t t-out="document.dsl_id.acronym"/>
+                            <span t-if="generation_target" class="badge bg-light text-dark border">
+                                <t t-out="generation_target.acronym"/>
+                            </span>
+                            <span t-if="generation_target" class="badge bg-light text-dark border">
+                                <t t-out="generation_target_label"/>
                             </span>
                             <span t-attf-class="badge rounded-pill
                                 #{'text-bg-secondary' if document.status == 'draft'
@@ -40,7 +65,7 @@
                             <div>
                                 <h3 class="h5 mb-1">Generate a document</h3>
                                 <p class="text-muted mb-0">
-                                    Upload a <t t-out="document.template_source_label"/>.
+                                    Upload a <t t-out="generation_source_label"/>.
                                     It will be applied to this template and the generated file will download automatically.
                                 </p>
                             </div>
@@ -105,25 +130,59 @@
                         <div t-if="not document.document_file" class="alert alert-warning mb-0" role="alert">
                             Upload a template file before generating a document.
                         </div>
-                        <div t-elif="not document.template_generation_supported" class="alert alert-warning mb-0" role="alert">
-                            This DSL needs an active, current, valid published grammar before templates can be generated.
+                        <div t-elif="not generation_target" class="alert alert-warning mb-0" role="alert">
+                            This template family has no active DSL version.
                         </div>
                         <div t-elif="not document.template_format_supported" class="alert alert-warning mb-0" role="alert">
                             The attached template format is not supported for generation.
                         </div>
-                        <form t-else="" t-attf-action="#{doc_base_url}/#{document.id}/generate"
+                        <div t-if="generation_target and not generation_target_supported"
+                             class="alert alert-warning mb-3" role="alert">
+                            This DSL version is not ready for generation.
+                        </div>
+                        <form t-if="generation_target and document.document_file and document.template_format_supported"
+                              t-attf-action="#{doc_base_url}/#{document.id}/generate"
                               method="post" enctype="multipart/form-data">
                             <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold" for="target_dsl_id">
+                                    DSL version
+                                </label>
+                                <t t-if="generation_target_can_select">
+                                    <select class="form-select" id="target_dsl_id" name="target_dsl_id">
+                                        <t t-foreach="generation_target_choices" t-as="target_option">
+                                            <option t-att-value="target_option.id"
+                                                    t-att-selected="target_option.id == generation_target.id">
+                                                <t t-out="target_option.version"/> -
+                                                <t t-out="dict(target_option._fields['status'].selection).get(target_option.status)"/>
+                                            </option>
+                                        </t>
+                                    </select>
+                                </t>
+                                <t t-else="">
+                                    <input type="hidden" name="target_dsl_id"
+                                           t-att-value="generation_target.id"/>
+                                    <div class="form-control-plaintext">
+                                        <t t-out="generation_target_label"/>
+                                    </div>
+                                </t>
+                            </div>
+                            <div t-if="generation_authored_version_label"
+                                 class="alert alert-info mb-3" role="status">
+                                Template authored for
+                                <t t-out="generation_authored_version_label"/>; generating with
+                                <t t-out="generation_target_label"/>.
+                            </div>
                             <div class="p-3 p-md-4 border rounded-3 bg-light mb-3">
                                 <label class="form-label fw-semibold" for="source_file">
-                                    <t t-out="document.template_source_label"/>
+                                    <t t-out="generation_source_label"/>
                                 </label>
                                 <input type="file" class="form-control bg-white" id="source_file"
-                                       name="source_file" t-att-accept="document.template_source_accept"
+                                       name="source_file" t-att-accept="generation_source_accept"
                                        required="required"/>
-                                <div t-if="document.template_source_accept" class="form-text">
+                                <div t-if="generation_source_accept" class="form-text">
                                     Accepted files:
-                                    <t t-out="document.template_source_accept.replace(',', ', ')"/>
+                                    <t t-out="generation_source_accept.replace(',', ', ')"/>
                                 </div>
                             </div>
                             <button type="submit" class="btn btn-success">
@@ -139,19 +198,19 @@
                                 <div class="small text-muted mt-2">
                                     <p class="mb-2">
                                         Every DSL provides
-                                        <code t-foreach="document.template_variable_groups.get('core', [])"
+                                        <code t-foreach="generation_variable_groups.get('core', [])"
                                               t-as="variable" class="me-1"><t t-out="variable"/></code>.
                                         Group concepts by grammar type with
                                         <code>by_type['ConceptName']</code>.
                                     </p>
-                                    <p t-if="document.template_variable_groups.get('aliases')" class="mb-0">
+                                    <p t-if="generation_variable_groups.get('aliases')" class="mb-0">
                                         This DSL also defines friendly aliases:
-                                        <code t-foreach="document.template_variable_groups['aliases']"
+                                        <code t-foreach="generation_variable_groups['aliases']"
                                               t-as="variable" class="me-1"><t t-out="variable"/></code>.
                                     </p>
-                                    <p t-if="document.dsl_id" class="mt-2 mb-0">
-                                        <a t-attf-href="/dsl/#{document.dsl_id.id}/template-reference">
-                                            Browse the complete <t t-out="document.dsl_id.acronym"/> Template Reference
+                                    <p t-if="generation_target" class="mt-2 mb-0">
+                                        <a t-attf-href="/dsl/#{generation_target.id}/template-reference">
+                                            Browse the complete <t t-out="generation_target.acronym"/> Template Reference
                                         </a>
                                         for exact type and field names.
                                     </p>

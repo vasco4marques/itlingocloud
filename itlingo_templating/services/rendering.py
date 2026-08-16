@@ -7,6 +7,7 @@ partial specifications still produce a document.
 import json
 import os
 import re
+import traceback
 
 
 OFFICE_TEMPLATE_FORMATS = frozenset({"docx", "xlsx"})
@@ -55,6 +56,64 @@ def lenient_env():
 
     env.policies["json.dumps_function"] = dumps_json_safe
     return env
+
+
+def render_best_effort(source, context, max_passes=10, env=None):
+    """Render *source* line-excising failures. Return (text, findings)."""
+    import jinja2
+
+    env = env if env is not None else lenient_env()
+    text = source
+    findings = []
+    for attempt in range(max_passes):
+        try:
+            return env.from_string(text).render(**context), findings
+        except Exception as error:
+            if isinstance(error, jinja2.TemplateSyntaxError):
+                kind = "template"
+                line = error.lineno
+                message = error.message or str(error)
+            else:
+                kind = "specification"
+                frames = traceback.extract_tb(error.__traceback__)
+                line = next(
+                    (
+                        frame.lineno
+                        for frame in reversed(frames)
+                        if frame.filename == "<template>"
+                    ),
+                    None,
+                )
+                message = str(error)
+            lines = text.splitlines(keepends=True)
+            if (
+                attempt == max_passes - 1
+                or not isinstance(line, int)
+                or not 1 <= line <= len(lines)
+            ):
+                raise
+            prefix = (
+                "TEMPLATE ERROR"
+                if kind == "template"
+                else "INCOMPATIBLE WITH SPECIFICATION"
+            )
+            ending = (
+                "\r\n"
+                if lines[line - 1].endswith("\r\n")
+                else lines[line - 1][-1:]
+                if lines[line - 1].endswith(("\r", "\n"))
+                else ""
+            )
+            findings.append({"kind": kind, "line": line, "message": message})
+            marker_message = " ".join(message.split())
+            lines[line - 1] = "%s (line %d): %s%s" % (
+                prefix,
+                line,
+                marker_message,
+                ending,
+            )
+            text = "".join(lines)
+    raise RuntimeError("max_passes must be positive")
 
 
 def render_filename(pattern, context, fallback, extension):

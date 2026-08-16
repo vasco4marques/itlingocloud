@@ -11,7 +11,7 @@ class ItlingoWorkspace(models.Model):
         "project_id",
         "dsl_id",
         string="Available DSLs",
-        domain="[('status', '=', 'active')]",
+        domain="[('status', '=', 'active'), ('family_id.active', '=', True)]",
         help="DSLs available in this workspace. If empty, the workspace "
              "inherits the DSLs allowed by its organization.",
     )
@@ -19,7 +19,7 @@ class ItlingoWorkspace(models.Model):
     default_dsl_id = fields.Many2one(
         "itlingo.dsl",
         string="Default DSL",
-        domain="[('status', '=', 'active')]",
+        domain="[('status', '=', 'active'), ('family_id.active', '=', True)]",
         help="Default DSL proposed for new specifications in this workspace.",
     )
 
@@ -60,7 +60,10 @@ class ItlingoWorkspace(models.Model):
         """
         self.ensure_one()
         dsl_model = self.env["itlingo.dsl"]
-        available = dsl_model.search([("status", "=", "active")])
+        available = dsl_model.search([
+            ("status", "=", "active"),
+            ("family_id.active", "=", True),
+        ])
         org = self.organization_id
         if org and org.allowed_dsl_ids:
             available &= org.allowed_dsl_ids

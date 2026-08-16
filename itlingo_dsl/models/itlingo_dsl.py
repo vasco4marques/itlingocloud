@@ -38,14 +38,26 @@ class ItlingoDsl(models.Model):
     _description = "ITLingo Domain-Specific Language"
     _order = "acronym asc, version desc"
 
-    name = fields.Char(
-        string="Name",
+    family_id = fields.Many2one(
+        "itlingo.dsl.family",
+        string="Family",
         required=True,
+        index=True,
+        ondelete="restrict",
+    )
+
+    name = fields.Char(
+        related="family_id.name",
+        string="Name",
+        readonly=True,
+        store=True,
     )
 
     acronym = fields.Char(
+        related="family_id.acronym",
         string="Acronym",
-        required=True,
+        readonly=True,
+        store=True,
     )
 
     version = fields.Char(
@@ -53,6 +65,7 @@ class ItlingoDsl(models.Model):
         required=True,
         default="1.0",
     )
+
 
     description = fields.Html(
         string="Description",
@@ -94,15 +107,17 @@ class ItlingoDsl(models.Model):
     )
 
     maintainer_ids = fields.Many2many(
-        "res.users",
+        related="family_id.maintainer_ids",
         string="Maintainers",
-        help="Users responsible for this DSL's metadata and documentation. "
-             "Maintainership does not by itself grant write access.",
+        readonly=False,
+        help="Users responsible for this DSL family and its versions.",
     )
 
     active = fields.Boolean(
+        related="family_id.active",
         string="Active",
-        default=True,
+        readonly=False,
+        store=True,
     )
 
     file_ids = fields.One2many(
@@ -240,9 +255,9 @@ class ItlingoDsl(models.Model):
         help="SHA-256 of the flattened grammar text active at publication.",
     )
 
-    _unique_acronym_version = models.Constraint(
-        "unique(acronym, version)",
-        "A DSL with this acronym and version already exists.",
+    _unique_family_version = models.Constraint(
+        "unique(family_id, version)",
+        "A DSL family with this version already exists.",
     )
 
     # ------------------------------------------------------------------
@@ -294,7 +309,10 @@ class ItlingoDsl(models.Model):
         nothing.
         """
         extensions = set()
-        for dsl in self.sudo().search([('status', 'in', IMPORTABLE_DSL_STATES)]):
+        for dsl in self.sudo().search([
+            ("status", "in", IMPORTABLE_DSL_STATES),
+            ("family_id.active", "=", True),
+        ]):
             suffix = DRAFT_EXTENSION_SUFFIX if dsl.status == 'draft' else ''
             for ext in dsl._extensions():
                 extensions.add(ext + suffix)
@@ -316,8 +334,10 @@ class ItlingoDsl(models.Model):
         wants_draft = raw.endswith(DRAFT_EXTENSION_SUFFIX)
         base = raw[:-len(DRAFT_EXTENSION_SUFFIX)] if wants_draft else raw
         matches = [
-            dsl for dsl in self.sudo().search(
-                [('status', 'in', IMPORTABLE_DSL_STATES)])
+            dsl for dsl in self.sudo().search([
+                ("status", "in", IMPORTABLE_DSL_STATES),
+                ("family_id.active", "=", True),
+            ])
             if base in dsl._extensions()
         ]
         if not matches:
@@ -701,16 +721,37 @@ class ItlingoDsl(models.Model):
                 ))
 
     def _active_acronym_sibling(self):
-        """The other DSL record that currently owns this acronym's KB entry."""
+        """The other active version in this DSL family."""
         self.ensure_one()
-        acronym = (self.acronym or "").strip()
-        if not acronym:
-            return self.browse()
         return self.sudo().search([
-            ("acronym", "=", acronym),
+            ("family_id", "=", self.family_id.id),
             ("status", "=", "active"),
             ("id", "!=", self.id),
         ], limit=1)
+
+
+    def action_validate_draft(self):
+        """Run current grammar and services checks without publishing."""
+        if not self.env.user.has_group(
+            "itlingo_organizations.group_itlingo_admin"
+        ):
+            unauthorized = self.filtered(
+                lambda dsl: not dsl._is_maintained_by(self.env.user)
+            )
+            if unauthorized:
+                raise AccessError(_(
+                    "Only platform administrators or family maintainers can "
+                    "validate draft versions.",
+                ))
+        for dsl in self:
+            if dsl.status != "draft":
+                raise UserError(_("Only draft versions can be validated."))
+            target = dsl.sudo()
+            if target._grammar_file():
+                target._run_grammar_validation()
+            if target._services_files():
+                target._run_services_compilation()
+        return True
 
     def action_publish(self):
         """Validate server-side and promote this version to active.
@@ -740,8 +781,10 @@ class ItlingoDsl(models.Model):
                 dsl._run_services_compilation()
             dsl._ensure_grammar_publishable()
             previous = dsl._active_acronym_sibling()
-            previous.write({"status": "deprecated"})
-            dsl.write({
+            previous.with_context(allow_dsl_lifecycle_write=True).write(
+                {"status": "deprecated"},
+            )
+            dsl.with_context(allow_dsl_lifecycle_write=True).write({
                 "status": "active",
                 "published_by_id": self.env.uid,
                 "published_at": fields.Datetime.now(),
@@ -760,8 +803,9 @@ class ItlingoDsl(models.Model):
             prefix, number = f"{self.version or '1'}.", 0
         candidate = f"{prefix}{number + 1}"
         while self.sudo().search_count([
-            ("acronym", "=", self.acronym), ("version", "=", candidate),
+            ("family_id", "=", self.family_id.id), ("version", "=", candidate),
         ]):
+
             number += 1
             candidate = f"{prefix}{number + 1}"
         return candidate
@@ -777,9 +821,11 @@ class ItlingoDsl(models.Model):
         if not version:
             raise ValidationError(_("A version is required for the new draft."))
         draft = self.copy({
+            "family_id": self.family_id.id,
             "version": version,
             "status": "draft",
         })
+
         # One2many fields are not copied by copy(); carry the definition
         # files (including the grammar) over to the new draft explicitly.
         copied_files = []
@@ -815,13 +861,61 @@ class ItlingoDsl(models.Model):
     # ------------------------------------------------------------------
     @api.model_create_multi
     def create(self, vals_list):
-        records = super().create(vals_list)
+        family_model = self.env["itlingo.dsl.family"]
+        prepared = []
+        active_family_ids = set()
+        for incoming in vals_list:
+            vals = dict(incoming)
+            family_id = vals.get("family_id")
+            family = family_model.browse(family_id).exists() if family_id else family_model.browse()
+            if family_id and not family:
+                raise ValidationError(_("The selected DSL family does not exist."))
+            if not family:
+                family = family_model._find_or_create_for_version(vals)
+                vals["family_id"] = family.id
+            vals["name"] = family.name
+            vals["acronym"] = family.acronym
+            if vals.get("status") == "active":
+                if family.id in active_family_ids or family.dsl_ids.filtered(
+                    lambda version: version.status == "active"
+                ):
+                    raise ValidationError(_(
+                        "A DSL family can have only one active version.",
+                    ))
+                active_family_ids.add(family.id)
+            prepared.append(vals)
+        records = super().create(prepared)
         records._sync_kb_files()
         records._sync_maintainer_group()
         records._refresh_document_formats()
         return records
 
     def write(self, vals):
+        if {"name", "acronym"} & set(vals):
+            raise ValidationError(_(
+                "A DSL version's name and acronym belong to its family.",
+            ))
+        if "family_id" in vals:
+            family_id = vals["family_id"]
+            family_id = getattr(family_id, "id", family_id)
+            if any(dsl.family_id.id != family_id for dsl in self):
+                raise ValidationError(_(
+                    "A DSL version cannot be moved to another family.",
+                ))
+        changing_status = (
+            "status" in vals
+            and self.filtered(lambda dsl: dsl.status != vals["status"])
+        )
+        if changing_status and not self.env.context.get(
+            "allow_dsl_lifecycle_write"
+        ):
+            if vals["status"] == "active":
+                self.filtered(
+                    lambda dsl: dsl.status != "active"
+                )._ensure_grammar_publishable()
+            raise ValidationError(_(
+                "Use the Publish action to change a DSL version's status.",
+            ))
         if vals.get("status") == "active":
             self.filtered(
                 lambda dsl: dsl.status != "active"
@@ -849,17 +943,18 @@ class ItlingoDsl(models.Model):
 
     @api.model
     def _sync_maintainer_group(self):
-        """Mirror the union of all DSL maintainers into the maintainer group.
-
-        The group is only used to surface DSL-management navigation for
-        maintainers; per-DSL edit rights remain enforced in the controller.
-        """
+        """Mirror family maintainers into the technical maintainer group."""
+        family_model = self.env.get("itlingo.dsl.family")
+        maintainers = (
+            family_model.sudo().search([]).mapped("maintainer_ids")
+            if family_model is not None
+            else self.sudo().search([]).mapped("maintainer_ids")
+        )
         group = self.env.ref(
             "itlingo_dsl.group_itlingo_dsl_maintainer", raise_if_not_found=False,
         )
         if not group:
             return
-        maintainers = self.sudo().search([]).mapped("maintainer_ids")
         group.sudo().write({"user_ids": [(6, 0, maintainers.ids)]})
 
     def _dsl_file_text(self, dsl_file):
@@ -897,12 +992,8 @@ class ItlingoDsl(models.Model):
             if not lang_name:
                 continue
 
-            # Only active DSLs are exposed to the chatbot. A non-active
-            # version (e.g. a draft being edited) must never clear the KB
-            # projection owned by the acronym's active version, so drafts
-            # are invisible to the chatbot until publication.
-            if dsl.status != "active":
-                if not dsl._active_acronym_sibling():
+            if dsl.status != "active" or not dsl.family_id.active:
+                if not dsl.family_id.active or not dsl._active_acronym_sibling():
                     dsl._remove_kb_files()
                 continue
 

@@ -89,15 +89,18 @@ def migrate(cr, version):
 
     templates_without_dsl = env['itlingo.document'].search([
         ('document_type_id', '=', canonical_id),
-        ('dsl_id', '=', False),
+        ('dsl_family_id', '=', False),
     ])
     dsls = env['itlingo.dsl'].search([])
     inferred = 0
     for document in templates_without_dsl:
         extension = os.path.splitext(document.file_name or '')[1].lower().lstrip('.')
         matches = dsls.filtered(lambda dsl: extension in dsl._extensions())
-        if len(matches) == 1:
-            document.dsl_id = matches.id
+        if len(matches) == 1 and matches.family_id:
+            document.write({
+                'dsl_family_id': matches.family_id.id,
+                'dsl_version_id': matches.id,
+            })
             inferred += 1
         else:
             _logger.warning(

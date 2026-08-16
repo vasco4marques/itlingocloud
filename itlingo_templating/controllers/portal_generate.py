@@ -73,7 +73,8 @@ class ItlingoTemplatingPortal(http.Controller):
         return f"{base_url}/{document_id}"
 
     def _render_detail(self, document, base_url, project_id=None, org_id=None,
-                       error=None, diagnostics=None, lint_result=None):
+                       error=None, diagnostics=None, lint_result=None,
+                       target=None):
         """Render generation feedback in the normal scoped document page."""
         portal = ITLingoPortal()
         values = portal._prepare_portal_layout_values()
@@ -112,6 +113,7 @@ class ItlingoTemplatingPortal(http.Controller):
                     project, "documentation", public_hub=False,
                 ),
             })
+        target = target or scoped_document._templating_generation_dsl()
         values.update({
             "document": scoped_document,
             "doc_base_url": base_url,
@@ -120,6 +122,7 @@ class ItlingoTemplatingPortal(http.Controller):
             "generation_error": error,
             "generation_diagnostics": diagnostics or [],
             "template_lint_result": lint_result,
+            **self._generation_values(scoped_document, target),
         })
         return request.render("itlingo_documents.portal_document_detail", values)
 
@@ -138,14 +141,63 @@ class ItlingoTemplatingPortal(http.Controller):
 
     @staticmethod
     def _template_format(document):
-        """Return the Office format or UTF-8 text file extension."""
         content = base64.b64decode(document.document_file or b"")
         return rendering.template_format(document.file_name, content)
 
     @staticmethod
-    def _source_extensions(document):
-        return _split_extensions(document.dsl_id.file_extensions) or [".dsl"]
+    def _source_extensions(dsl):
+        return _split_extensions(dsl.file_extensions) or [".dsl"]
 
+    def _resolve_generation_target(self, document, posted_id=None):
+        context = document._templating_generation_context()
+        family = document.dsl_family_id
+        if not family:
+            return request.env["itlingo.dsl"].browse(), _(
+                "This template is not associated with a DSL family."
+            )
+        active = context["generation_active_target"]
+        target = active
+        if posted_id:
+            try:
+                target_id = int(posted_id)
+            except (TypeError, ValueError):
+                target_id = 0
+            target = request.env["itlingo.dsl"].sudo().browse(target_id)
+            if (
+                target.exists()
+                and target.family_id == family
+                and target.status == "deprecated"
+            ):
+                return target, _(
+                    "The active DSL version changed. Refresh the page and try again."
+                )
+            if (
+                not target.exists()
+                or target.family_id != family
+                or target.status not in ("active", "draft")
+            ):
+                return target, _(
+                    "The selected DSL version is no longer available for this "
+                    "template family. Refresh the page and try again."
+                )
+            if target.status == "draft" and target.id not in context[
+                "generation_target_choices"
+            ].ids:
+                return target, _("Draft DSL versions are not available to you.")
+            if target.status == "active" and target.id != active.id:
+                return target, _(
+                    "The active DSL version changed. Refresh the page and try again."
+                )
+        if not target:
+            return target, _(
+                "This template family has no active DSL version. "
+                "Ask a platform administrator to publish one."
+            )
+        return target, None
+    def _generation_values(self, document, target):
+        return document.with_user(request.env.user)._templating_generation_context(
+            target,
+        )
     @staticmethod
     def _build_context(dsl, ast):
         model = canonical_model.build_generic_model(
@@ -181,7 +233,7 @@ class ItlingoTemplatingPortal(http.Controller):
     def portal_check_workspace(self, project_id, document_id, **post):
         return self._portal_check(
             document_id, f"/my/workspaces/{project_id}/documents",
-            project_id=project_id,
+            project_id=project_id, **post,
         )
 
     @http.route(
@@ -191,30 +243,41 @@ class ItlingoTemplatingPortal(http.Controller):
     def portal_check_organization(self, org_id, document_id, **post):
         return self._portal_check(
             document_id, f"/my/organizations/{org_id}/documents",
-            org_id=org_id,
+            org_id=org_id, **post,
         )
 
-    def _portal_check(self, document_id, base_url, project_id=None, org_id=None):
+    def _portal_check(self, document_id, base_url, project_id=None, org_id=None,
+                      **post):
         document = self._get_template_document(document_id)
         if project_id is not None and document.project_id.id != project_id:
             raise MissingError(_("Document not found."))
         if org_id is not None and document.organization_id.id != org_id:
             raise MissingError(_("Document not found."))
+        target, target_error = self._resolve_generation_target(
+            document, post.get("target_dsl_id") or post.get("dsl_version_id")
+        )
+        if target_error:
+            return self._render_detail(
+                document, base_url, project_id=project_id, org_id=org_id,
+                error=target_error, target=target,
+            )
+        if not is_templatable_dsl(request.env, target):
+            return self._render_detail(
+                document, base_url, project_id=project_id, org_id=org_id,
+                error=_("This DSL version is not ready for template checking."),
+                target=target,
+            )
         fmt = self._template_format(document)
         if not fmt or not document.document_file:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
                 error=_("Only supported template files with an attached file can be checked."),
-            )
-        if not document.dsl_id:
-            return self._render_detail(
-                document, base_url, project_id=project_id, org_id=org_id,
-                error=_("This template is not associated with a DSL."),
+                target=target,
             )
         try:
             result = template_linter.lint_template(
                 base64.b64decode(document.document_file), fmt,
-                document.dsl_id._template_reference_context(),
+                target._template_reference_context(),
             )
         except (ImportError, UnicodeDecodeError) as err:
             result = {
@@ -229,13 +292,12 @@ class ItlingoTemplatingPortal(http.Controller):
             }
         return self._render_detail(
             document, base_url, project_id=project_id, org_id=org_id,
-            lint_result=result,
+            lint_result=result, target=target,
         )
 
     def _portal_generate(self, document_id, base_url, project_id=None,
                          org_id=None, **post):
         document = self._get_template_document(document_id)
-        # The document must belong to the scope it is reached through.
         if project_id is not None and document.project_id.id != project_id:
             raise MissingError(_("Document not found."))
         if org_id is not None and document.organization_id.id != org_id:
@@ -249,27 +311,37 @@ class ItlingoTemplatingPortal(http.Controller):
                 ),
             )
 
-        if not document.dsl_id:
+        target, target_error = self._resolve_generation_target(
+            document,
+            post.get("target_dsl_id") or post.get("dsl_version_id"),
+        )
+        if target_error:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
-                error=_("This template is not associated with a DSL."),
+                error=target_error, target=target,
             )
-        if not is_templatable_dsl(request.env, document.dsl_id):
+        if not is_templatable_dsl(request.env, target):
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
-                error=_("This DSL does not have a current, valid published grammar."),
+                error=_(
+                    "This DSL version does not have a current, valid grammar "
+                    "and compiled services module."
+                ),
+                target=target,
             )
 
-        source_extensions = self._source_extensions(document)
+        source_extensions = self._source_extensions(target)
 
         if request.httprequest.method != "POST":
             return request.redirect(self._detail_url(base_url, document.id) + "#generate")
+
 
         upload = request.httprequest.files.get("source_file")
         if not upload or not upload.filename:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
-                error=_("Please upload a %s file.") % dsl_label(document.dsl_id),
+                error=_("Please upload a %s file.") % dsl_label(target),
+                target=target,
             )
         filename_lower = upload.filename.lower()
         if source_extensions and not any(
@@ -278,16 +350,17 @@ class ItlingoTemplatingPortal(http.Controller):
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
                 error=_("Please upload a %s file (%s).") % (
-                    dsl_label(document.dsl_id),
+                    dsl_label(target),
                     ", ".join(source_extensions),
                 ),
+                target=target,
             )
 
         source_bytes = upload.read()
         try:
             ast = parse_dsl(
                 request.env,
-                document.dsl_id,
+                target,
                 source_bytes,
                 scope_document=document,
                 source_name=upload.filename,
@@ -295,19 +368,33 @@ class ItlingoTemplatingPortal(http.Controller):
         except DslParseError as err:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
-                error=str(err), diagnostics=err.diagnostics,
+                error=str(err), diagnostics=err.diagnostics, target=target,
             )
         except RuntimeError as err:
             _logger.exception(
                 "%s parsing failed for document %s",
-                document.dsl_id.acronym or "DSL", document.id,
+                target.acronym or "DSL", document.id,
             )
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
-                error=str(err),
+                error=str(err), target=target,
             )
 
-        context = self._build_context(document.dsl_id, ast)
+        try:
+            context = self._build_context(target, ast)
+        except Exception as err:
+            _logger.exception(
+                "%s context building failed for document %s",
+                target.acronym or "DSL", document.id,
+            )
+            return self._render_detail(
+                document, base_url, project_id=project_id, org_id=org_id,
+                error=_(
+                    "The generation context could not be built from the "
+                    "parsed specification: %s"
+                ) % err,
+                target=target,
+            )
 
         # Extra variables available only to output filenames.
         template_name = os.path.splitext(document.file_name or document.name or "template")[0]
@@ -344,6 +431,7 @@ class ItlingoTemplatingPortal(http.Controller):
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
                 error=_("Text template files must be encoded as UTF-8."),
+                target=target,
             )
         except ImportError:
             return self._render_detail(
@@ -352,12 +440,14 @@ class ItlingoTemplatingPortal(http.Controller):
                     "The Python package required to render %s files is not "
                     "installed on the server." % fmt.upper()
                 ),
+                target=target,
             )
         except Exception as err:
             _logger.exception("%s rendering failed for document %s", fmt, document.id)
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
                 error=_("Document generation failed: %s") % err,
+                target=target,
             )
 
         filename = rendering.render_filename(

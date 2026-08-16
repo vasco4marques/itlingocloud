@@ -49,8 +49,10 @@ class ITLingoDslPortal(CustomerPortal):
         return self._itlingo_is_admin() or request.env.user in dsl.maintainer_ids
 
     def _can_view_dsl(self, dsl):
-        return dsl.status == 'active' or self._can_edit_dsl(dsl)
-
+        return (
+            dsl.family_id.active
+            and dsl.status == 'active'
+        ) or self._can_edit_dsl(dsl)
     def _require_dsl_view(self, dsl):
         if not self._can_view_dsl(dsl):
             raise MissingError(_('DSL not found.'))
@@ -60,10 +62,15 @@ class ITLingoDslPortal(CustomerPortal):
         if self._itlingo_is_admin():
             return []
         if request.env.user._is_public():
-            return [('status', '=', 'active')]
+            return [
+                ('status', '=', 'active'),
+                ('family_id.active', '=', True),
+            ]
         return [
             '|',
+            '&',
             ('status', '=', 'active'),
+            ('family_id.active', '=', True),
             ('id', 'in', self._maintained_dsl_ids()),
         ]
 
@@ -157,7 +164,11 @@ class ITLingoDslPortal(CustomerPortal):
             else:
                 maintained_ids = self._maintained_dsl_ids()
                 values['dsl_count'] = request.env['itlingo.dsl'].sudo().search_count([
-                    '|', ('status', '=', 'active'), ('id', 'in', maintained_ids),
+                    '|',
+                    '&',
+                    ('status', '=', 'active'),
+                    ('family_id.active', '=', True),
+                    ('id', 'in', maintained_ids),
                 ])
         return values
 
@@ -241,6 +252,7 @@ class ITLingoDslPortal(CustomerPortal):
         })
         if request.httprequest.method == 'POST':
             vals = self._dsl_form_values(post)
+            vals['status'] = 'draft'
             values['form'] = vals
             error = self._dsl_validate(vals)
             if error:
@@ -289,21 +301,34 @@ class ITLingoDslPortal(CustomerPortal):
             'dsl_message': request.params.get('message'),
             'dsl_error': request.params.get('error'),
             'can_edit_grammar': dsl.status == 'draft',
+            'can_validate_draft': dsl.status == 'draft',
             'dsl_versions': request.env['itlingo.dsl'].sudo().search(
-                [('acronym', '=', dsl.acronym)], order='version desc',
+                [('family_id', '=', dsl.family_id.id)], order='version desc',
             ),
             'suggested_version': dsl._suggest_next_version(),
             'publish_error': request.session.pop('dsl_publish_error', None),
+            'validate_error': request.session.pop('dsl_validate_error', None),
         })
         if request.httprequest.method == 'POST':
             vals = self._dsl_form_values(post)
+            if not self._itlingo_is_admin():
+                vals['name'] = dsl.name
+                vals['acronym'] = dsl.acronym
             values['form'] = vals
             error = self._dsl_validate(vals, exclude_id=dsl.id)
             if error:
                 values['error'] = error
             else:
                 try:
-                    dsl.write(self._dsl_write_vals(vals))
+                    write_vals = self._dsl_write_vals(vals)
+                    if self._itlingo_is_admin():
+                        dsl.family_id.write({
+                            'name': vals['name'],
+                            'acronym': vals['acronym'],
+                        })
+                    write_vals.pop('name', None)
+                    write_vals.pop('acronym', None)
+                    dsl.write(write_vals)
                 except (UserError, ValidationError) as err:
                     values['error']['_form'] = str(err)
                 else:
@@ -328,6 +353,18 @@ class ITLingoDslPortal(CustomerPortal):
             request.session['dsl_publish_error'] = str(err)
             return request.redirect(f'/dsl/{dsl.id}?error=publish_failed')
         return request.redirect(f'/dsl/{dsl.id}?message=published')
+
+    @route('/dsl/<int:dsl_id>/validate-draft', type='http', auth='user',
+           website=True, methods=['POST'])
+    def portal_dsl_validate_draft(self, dsl_id, **post):
+        dsl = self._dsl_or_404(dsl_id)
+        self._require_dsl_edit(dsl)
+        try:
+            dsl.action_validate_draft()
+        except (UserError, ValidationError, AccessError) as err:
+            request.session['dsl_validate_error'] = str(err)
+            return request.redirect(f'/dsl/{dsl.id}?error=validate_failed')
+        return request.redirect(f'/dsl/{dsl.id}?message=validated')
 
     @route('/dsl/<int:dsl_id>/create-draft', type='http', auth='user',
            website=True, methods=['POST'])

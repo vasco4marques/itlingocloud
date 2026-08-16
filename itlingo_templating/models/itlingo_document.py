@@ -1,5 +1,6 @@
 import base64
 
+
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
@@ -11,9 +12,99 @@ from odoo.addons.itlingo_templating.services.rendering import template_format
 
 TEMPLATE_TYPE_CODE = "template"
 
-
 class ItlingoDocument(models.Model):
     _inherit = "itlingo.document"
+
+    def _templating_generation_dsl(self):
+        """Return the family target used by template authoring metadata."""
+        self.ensure_one()
+        family = self.dsl_family_id
+        if not family:
+            return self.env["itlingo.dsl"].browse()
+        return self.env["itlingo.dsl"].search([
+            ("family_id", "=", family.id),
+            ("status", "=", "active"),
+        ], order="id", limit=1)
+    def _templating_generation_context(self, target=None):
+        """Build the authorized generation target context for portal pages."""
+        self.ensure_one()
+        empty = self.env["itlingo.dsl"].browse()
+        family = self.dsl_family_id
+        if not family or not family.active:
+            target = empty
+            choices = empty
+            active = empty
+            can_select = False
+        else:
+            Dsl = self.env["itlingo.dsl"].sudo()
+            active = Dsl.search([
+                ("family_id", "=", family.id),
+                ("status", "=", "active"),
+            ], order="id", limit=1)
+            can_select = (
+                self.env.user.has_group(
+                    "itlingo_organizations.group_itlingo_admin",
+                )
+                or self.env.user.id in family.sudo().maintainer_ids.ids
+            )
+            choices = active
+            if can_select:
+                choices |= Dsl.search([
+                    ("family_id", "=", family.id),
+                    ("status", "=", "draft"),
+                ], order="version desc, id")
+            target = target or active
+            if (
+                not target
+                or target.family_id != family
+                or target.status not in ("active", "draft")
+                or target.id not in choices.ids
+            ):
+                target = active
+        authored_version = self.dsl_version_id
+        states = dict(
+            self.env["itlingo.dsl"]._fields["status"].selection,
+        )
+        extensions = []
+        for raw_extension in (target.file_extensions or "").split(","):
+            extension = raw_extension.strip().lower()
+            if extension and not extension.startswith("."):
+                extension = "." + extension
+            if extension:
+                extensions.append(extension)
+        if target and not extensions:
+            extensions = [".%s" % extension for extension in target._extensions()]
+        return {
+            "generation_active_target": active,
+            "generation_target": target,
+            "generation_target_choices": choices,
+            "generation_target_can_select": can_select,
+            "generation_target_label": (
+                "%s - %s" % (
+                    target.version or "",
+                    states.get(target.status, target.status),
+                )
+                if target else "No active version"
+            ),
+            "generation_target_supported": is_templatable_dsl(
+                self.env, target,
+            ),
+            "generation_source_label": (
+                dsl_label(target) if target else "DSL specification"
+            ),
+            "generation_source_accept": ",".join(extensions),
+            "generation_variable_groups": (
+                target._templating_variable_groups() if target else {}
+            ),
+            "generation_authored_version_label": (
+                authored_version.version
+                if authored_version and (
+                    not target or authored_version != target
+                )
+                else False
+            ),
+        }
+
 
     is_template = fields.Boolean(
         string="Is Template",
@@ -34,25 +125,9 @@ class ItlingoDocument(models.Model):
              "member names come from its {# output: ... #} headers. "
              "Defaults to the template name.",
     )
-    template_generation_supported = fields.Boolean(
-        string="Template Generation Supported",
-        compute="_compute_template_generation_supported",
-    )
     template_format_supported = fields.Boolean(
         string="Template Format Supported",
         compute="_compute_template_format_supported",
-    )
-    template_source_label = fields.Char(
-        string="Template Source Label",
-        compute="_compute_template_source_metadata",
-    )
-    template_source_accept = fields.Char(
-        string="Template Source Accepted Extensions",
-        compute="_compute_template_source_metadata",
-    )
-    template_variable_groups = fields.Json(
-        string="Available Template Variables",
-        compute="_compute_template_variable_groups",
     )
 
     @api.depends("document_type_id", "document_type_id.type_code")
@@ -60,12 +135,6 @@ class ItlingoDocument(models.Model):
         for doc in self:
             doc.is_template = doc.document_type_id.type_code == TEMPLATE_TYPE_CODE
 
-    @api.depends("dsl_id")
-    def _compute_template_generation_supported(self):
-        for doc in self:
-            doc.template_generation_supported = is_templatable_dsl(
-                doc.env, doc.dsl_id,
-            )
 
     def _uploaded_template_format(self):
         self.ensure_one()
@@ -79,40 +148,16 @@ class ItlingoDocument(models.Model):
                 doc.document_file and doc._uploaded_template_format()
             )
 
-    @api.depends("dsl_id", "dsl_id.file_extensions")
-    def _compute_template_source_metadata(self):
-        for doc in self:
-            extensions = []
-            for raw_extension in (doc.dsl_id.file_extensions or "").split(","):
-                extension = raw_extension.strip().lower()
-                if extension and not extension.startswith("."):
-                    extension = "." + extension
-                if extension:
-                    extensions.append(extension)
-            if doc.dsl_id and not extensions:
-                extensions = [
-                    ".%s" % extension for extension in doc.dsl_id._extensions()
-                ]
-            doc.template_source_label = (
-                dsl_label(doc.dsl_id) if doc.dsl_id else "DSL specification"
-            )
-            doc.template_source_accept = ",".join(extensions)
-
-    @api.depends("dsl_id", "dsl_id.template_profile")
-    def _compute_template_variable_groups(self):
-        for doc in self:
-            doc.template_variable_groups = (
-                doc.dsl_id._templating_variable_groups() if doc.dsl_id else {}
-            )
 
     @api.constrains(
-        "document_type_id", "dsl_knowledge", "dsl_id", "document_file", "file_name",
+        "document_type_id", "dsl_knowledge", "dsl_family_id",
+        "dsl_version_id", "document_file", "file_name",
     )
     def _check_template_not_knowledge(self):
         for doc in self:
-            if doc.is_template and not doc.dsl_id:
+            if doc.is_template and not doc.dsl_family_id:
                 raise ValidationError(_(
-                    "A template must be associated with exactly one DSL "
+                    "A template must be associated with a DSL family "
                     "(document: %s).", doc.name,
                 ))
             if (

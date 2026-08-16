@@ -1,6 +1,6 @@
 {
     'name': 'ITLingo DSL',
-    'version': '19.0.1.6.0',
+    'version': '19.0.1.7.0',
     'category': 'Services',
     'summary': 'Platform-level Domain-Specific Language registry for ITLingo Cloud',
     'description': """

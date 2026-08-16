@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import re
@@ -10,7 +11,39 @@ from odoo.tests.common import new_test_user
 from odoo.addons.itlingo_templating.controllers.portal_generate import (
     ItlingoTemplatingPortal,
 )
+from odoo.addons.itlingo_templating.services.dsl_parser import (
+    is_templatable_dsl,
+)
 from odoo.addons.itlingo_templating.services.text_renderer import render_text
+
+
+class _ReadinessDsl:
+    status = "draft"
+    grammar_validation_result = "valid"
+    grammar_validation_is_current = True
+    published_digest = False
+
+    def _grammar_file(self):
+        return True
+
+    def _grammar_digest(self):
+        return "current"
+
+    def _services_files(self):
+        return False
+
+
+class _ServicesReadinessDsl(_ReadinessDsl):
+    services_compile_result = "ok"
+    services_source_digest = "services-current"
+    services_compiled = "compiled"
+    services_compiled_digest = hashlib.sha256(b"compiled").hexdigest()
+
+    def _services_files(self):
+        return [True]
+
+    def _services_source_digest(self):
+        return "services-current"
 
 
 SOURCE_GRAMMAR = r"""
@@ -44,7 +77,24 @@ class TestPortalGenerate(HttpCase):
             "role": "org_manager",
             "state": "accepted",
         })
+        cls.maintainer_user = new_test_user(
+            cls.env,
+            login="template_maintainer",
+            groups="base.group_portal",
+        )
+        cls.env["itlingo.organization.role"].create({
+            "user_id": cls.maintainer_user.id,
+            "organization_id": cls.organization.id,
+            "role": "org_manager",
+            "state": "accepted",
+        })
+        cls.family = cls.env["itlingo.dsl.family"].create({
+            "name": "Template Source Language",
+            "acronym": "TSL",
+        })
+        cls.family.write({"maintainer_ids": [(6, 0, [cls.maintainer_user.id])]})
         cls.dsl = cls.env["itlingo.dsl"].create({
+            "family_id": cls.family.id,
             "name": "Template Source Language",
             "acronym": "TSL",
             "version": "test-1.0",
@@ -58,13 +108,42 @@ class TestPortalGenerate(HttpCase):
             cls.dsl, "TSL.langium", SOURCE_GRAMMAR,
         )
         cls.dsl.action_publish()
+        cls.draft_one = cls.env["itlingo.dsl"].create({
+            "family_id": cls.family.id,
+            "name": "Template Source Language",
+            "acronym": "TSL",
+            "version": "test-2.0-draft",
+            "status": "draft",
+            "file_extensions": ".tsl",
+            "template_profile": json.dumps({
+                "bucket_aliases": {"Requirement": "requirements"},
+            }),
+        })
+        cls.env["itlingo.dsl.file"]._create_grammar_text(
+            cls.draft_one, "TSL.langium", SOURCE_GRAMMAR,
+        )
+        cls.draft_two = cls.env["itlingo.dsl"].create({
+            "family_id": cls.family.id,
+            "name": "Template Source Language",
+            "acronym": "TSL",
+            "version": "test-3.0-draft",
+            "status": "draft",
+            "file_extensions": ".tsl",
+            "template_profile": json.dumps({
+                "bucket_aliases": {"Requirement": "requirements"},
+            }),
+        })
+        cls.env["itlingo.dsl.file"]._create_grammar_text(
+            cls.draft_two, "TSL.langium", SOURCE_GRAMMAR,
+        )
         cls.document = cls.env["itlingo.document"].create({
             "name": "Requirements report",
             "organization_id": cls.organization.id,
             "document_type_id": cls.env.ref(
                 "itlingo_documents.doc_type_template"
             ).id,
-            "dsl_id": cls.dsl.id,
+            "dsl_family_id": cls.family.id,
+            "dsl_version_id": cls.dsl.id,
             "document_file": base64.b64encode(b"{{ root.name }}"),
             "file_name": "requirements.py",
             "status": "published",
@@ -89,7 +168,8 @@ class TestPortalGenerate(HttpCase):
             "document_type_id": cls.env.ref(
                 "itlingo_documents.doc_type_template"
             ).id,
-            "dsl_id": cls.dsl.id,
+            "dsl_family_id": cls.family.id,
+            "dsl_version_id": cls.dsl.id,
             "document_file": base64.b64encode(b"{{ specification.name }}"),
             "file_name": "workspace-report.txt",
             "status": "published",
@@ -113,10 +193,89 @@ class TestPortalGenerate(HttpCase):
         self.assertIn("Template information", response.text)
         self.assertIn("Check template", response.text)
         self.assertIn(".tsl", response.text)
+        self.assertIn("test-1.0 - Active", response.text)
         self.assertIn(
-            f"/dsl/{self.document.dsl_id.id}/template-reference",
+            f"/dsl/{self.dsl.id}/template-reference",
             response.text,
         )
+    def test_normal_user_sees_only_loaded_active_target(self):
+        response = self.url_open(self.detail_url)
+
+        self.assertIn("test-1.0 - Active", response.text)
+        self.assertNotRegex(response.text, r"test-2\.0-draft\s*-\s*Draft")
+        self.assertNotRegex(response.text, r"test-3\.0-draft\s*-\s*Draft")
+        self.assertNotIn('<select class="form-select" id="target_dsl_id"', response.text)
+
+    def test_maintainer_sees_all_drafts_and_multiple_drafts(self):
+        self.authenticate("template_maintainer", "template_maintainer")
+        try:
+            response = self.url_open(self.detail_url)
+        finally:
+            self.authenticate("template_portal", "template_portal")
+        self.assertIn('<select class="form-select" id="target_dsl_id"', response.text)
+        self.assertRegex(response.text, r"test-1\.0\s*-\s*Active")
+        self.assertRegex(response.text, r"test-2\.0-draft\s*-\s*Draft")
+        self.assertRegex(response.text, r"test-3\.0-draft\s*-\s*Draft")
+
+    def test_normal_user_cannot_post_private_draft(self):
+        csrf_token = re.search(
+            r'name="csrf_token" value="([^"]+)"', self.url_open(self.detail_url).text,
+        ).group(1)
+        response = self.url_open(
+            self.detail_url + "/generate",
+            data={
+                "csrf_token": csrf_token,
+                "target_dsl_id": str(self.draft_one.id),
+            },
+            files={"source_file": ("demo.tsl", b"specification demo", "text/plain")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Draft DSL versions are not available to you.", response.text)
+
+    def test_authored_version_does_not_control_generation_target(self):
+        self.document.dsl_version_id = self.draft_one.id
+
+        response = self._post_generate()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"demo")
+
+    def test_stale_active_target_requires_refresh(self):
+        replacement = self.env["itlingo.dsl"].create({
+            "family_id": self.family.id,
+            "name": "Template Source Language",
+            "acronym": "TSL",
+            "version": "test-4.0",
+            "status": "draft",
+            "file_extensions": ".tsl",
+        })
+        self.env["itlingo.dsl.file"]._create_grammar_text(
+            replacement, "TSL.langium", SOURCE_GRAMMAR,
+        )
+        replacement.action_publish()
+        csrf_token = re.search(
+            r'name="csrf_token" value="([^"]+)"', self.url_open(self.detail_url).text,
+        ).group(1)
+        response = self.url_open(
+            self.detail_url + "/generate",
+            data={
+                "csrf_token": csrf_token,
+                "target_dsl_id": str(self.dsl.id),
+            },
+            files={"source_file": ("demo.tsl", b"specification demo", "text/plain")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("active DSL version changed", response.text)
+
+    def test_draft_readiness_does_not_require_published_digest(self):
+        draft = _ReadinessDsl()
+        self.assertTrue(is_templatable_dsl(self.env, draft))
+        services_draft = _ServicesReadinessDsl()
+        self.assertTrue(is_templatable_dsl(self.env, services_draft))
+        draft.status = "active"
+        self.assertFalse(is_templatable_dsl(self.env, draft))
 
     def test_bundle_guidance_hidden_only_for_office_attachments(self):
         guidance = "Producing several files from one text template"

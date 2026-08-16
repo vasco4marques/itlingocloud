@@ -1,10 +1,14 @@
+from odoo import api
+from types import SimpleNamespace
 import re
 from unittest.mock import patch
 
 from lxml import html
 
 from odoo.tests import HttpCase, JsonRpcException, new_test_user, tagged
-from odoo.tools import mute_logger
+from odoo.exceptions import ValidationError
+from odoo.tests.common import TransactionCase
+from odoo.tools.misc import mute_logger
 
 VALID_GRAMMAR = (
     "grammar {name}\n"
@@ -1328,6 +1332,8 @@ class TestDslLifecyclePortal(HttpCase):
 
         self.assertNotIn(f'/dsl/{dsl.id}/publish', page.text)
         self.assertIn('Only a Platform Admin can publish', page.text)
+        self.assertNotIn('id="e_status"', page.text)
+        self.assertIn('Draft', page.text)
         with mute_logger('odoo.http'):
             response = self.url_open(
                 f'/dsl/{dsl.id}/publish',
@@ -1381,3 +1387,86 @@ class TestDslLifecyclePortal(HttpCase):
         )
         dsl.invalidate_recordset()
         self.assertEqual(dsl.status, 'active')
+
+@tagged('post_install', '-at_install')
+class TestDocumentDslControllerValidation(TransactionCase):
+    def setUp(self):
+        super().setUp()
+        self.maintainer = new_test_user(
+            self.env,
+            login='document_family_maintainer',
+            password='document_family_maintainer',
+            groups='base.group_portal',
+        )
+        self.editor = new_test_user(
+            self.env,
+            login='document_family_editor',
+            password='document_family_editor',
+            groups='base.group_portal',
+        )
+        self.active_version = self.env['itlingo.dsl'].create({
+            'name': 'Controller Family One',
+            'acronym': 'CFONE',
+            'version': '1.0',
+            'status': 'active',
+        })
+        self.family = self.active_version.family_id
+        self.family.write({
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.deprecated_version = self.env['itlingo.dsl'].create({
+            'name': 'Controller Family One',
+            'acronym': 'CFONE',
+            'version': '0.9',
+            'status': 'deprecated',
+            'family_id': self.family.id,
+        })
+        self.draft_version = self.env['itlingo.dsl'].create({
+            'name': 'Controller Family One',
+            'acronym': 'CFONE',
+            'version': '2.0',
+            'status': 'draft',
+            'family_id': self.family.id,
+        })
+
+    def _portal_with_editor(self):
+        from odoo.addons.itlingo_website_portal.controllers.portal import (
+            ITLingoPortal,
+        )
+        return ITLingoPortal(), api.Environment(
+            self.env.cr, self.editor.id, dict(self.env.context),
+        )
+
+    def test_active_family_and_deprecated_provenance_are_visible(self):
+        portal, editor_env = self._portal_with_editor()
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            families = portal._portal_visible_dsl_families()
+            versions = portal._portal_visible_dsl_versions(families)
+        self.assertIn(self.family, families)
+        self.assertIn(self.active_version, versions)
+        self.assertIn(self.deprecated_version, versions)
+        self.assertNotIn(self.draft_version, versions)
+
+    def test_controller_rejects_cross_family_version(self):
+        other = self.env['itlingo.dsl'].create({
+            'name': 'Controller Family Two',
+            'acronym': 'CFTWO',
+            'version': '1.0',
+            'status': 'active',
+        })
+        portal, editor_env = self._portal_with_editor()
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal._',
+            lambda text: text,
+        ), patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            with self.assertRaises(ValidationError):
+                portal._portal_document_meta_vals({
+                    'dsl_family_id': self.family.id,
+                    'dsl_version_id': other.id,
+                })

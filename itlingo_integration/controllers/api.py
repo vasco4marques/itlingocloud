@@ -356,8 +356,8 @@ class ITLingoIntegrationAPI(http.Controller):
         """Return the scoped spec corpus used for cross-file DSL imports.
 
         This is deliberately narrower than a generic file API: only text from
-        documents assigned to this exact DSL and to the launch token's
-        workspace/organization is exposed.
+        documents in the requested DSL family and launch token's
+        workspace/organization is exposed, regardless of version pins.
         """
         payload, error_resp = self._validate_launch_token()
         if error_resp:

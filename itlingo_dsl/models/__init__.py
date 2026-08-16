@@ -1,3 +1,4 @@
+from . import itlingo_dsl_family
 from . import itlingo_dsl
 from . import itlingo_dsl_resource
 from . import itlingo_dsl_file

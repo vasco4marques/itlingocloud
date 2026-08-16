@@ -7,6 +7,7 @@
         <field name="model">itlingo.dsl</field>
         <field name="arch" type="xml">
             <list string="DSLs">
+                <field name="family_id"/>
                 <field name="name"/>
                 <field name="acronym"/>
                 <field name="version"/>
@@ -31,12 +32,18 @@
                             string="Publish" class="btn-primary"
                             invisible="status == 'active' or not id"
                             confirm="Publishing validates the grammar server-side, deprecates any previously active version of this acronym, and refreshes the chatbot knowledge base. It does not build or deploy templating/ITOI parsers, which remain separately deployed. Continue?"/>
+                    <button name="action_validate_draft" type="object"
+                            string="Validate Draft"
+                            class="btn-secondary"
+                            invisible="status != 'draft' or not id"
+                            help="Run current grammar validation and services compilation without publishing this draft."/>
                     <button name="action_create_draft_version_ui" type="object"
                             string="Create Draft Version"
                             invisible="status == 'draft' or not id"
                             help="Copies this DSL's metadata and definition files into a new editable draft version without modifying this version."/>
                     <field name="status" widget="statusbar"
-                           statusbar_visible="draft,active,deprecated"/>
+                           statusbar_visible="draft,active,deprecated"
+                           readonly="1"/>
                 </header>
                 <sheet>
                     <widget name="web_ribbon" title="Archived"
@@ -49,9 +56,10 @@
                     </div>
                     <group>
                         <group string="Main Information">
+                            <field name="family_id"/>
                             <field name="acronym"/>
                             <field name="version"/>
-                            <field name="status"/>
+                            <field name="status" readonly="1"/>
                         </group>
                         <group string="Technical References">
                             <field name="file_extensions"/>
@@ -154,6 +162,7 @@
         <field name="model">itlingo.dsl</field>
         <field name="arch" type="xml">
             <search>
+                <field name="family_id"/>
                 <field name="name"/>
                 <field name="acronym"/>
                 <field name="version"/>

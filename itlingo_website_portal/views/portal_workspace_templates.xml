@@ -354,9 +354,17 @@
                                 <dd><t t-out="document.organization_id.name or 'N/A'"/></dd>
                                 <dt>Document Type</dt>
                                 <dd><t t-out="document.document_type_id.name or 'N/A'"/></dd>
-                                <dt>DSL</dt>
+                                <dt>DSL family</dt>
                                 <dd>
-                                    <t t-if="document.dsl_id" t-out="document.dsl_id.acronym"/>
+                                    <t t-if="document.dsl_family_id" t-out="document.dsl_family_id.acronym"/>
+                                    <t t-else="">—</t>
+                                </dd>
+                                <dt>DSL version</dt>
+                                <dd>
+                                    <t t-if="document.dsl_version_id">
+                                        <t t-out="document.dsl_version_id.version"/> -
+                                        <t t-out="dict(document.dsl_version_id._fields['status'].selection).get(document.dsl_version_id.status)"/>
+                                    </t>
                                     <t t-else="">—</t>
                                 </dd>
                             </dl>
@@ -883,7 +891,13 @@
                                     </td>
                                     <td><t t-out="doc.document_type_id.name or '—'"/></td>
                                     <td>
-                                        <t t-if="doc.dsl_id" t-out="doc.dsl_id.acronym"/>
+                                        <t t-if="doc.dsl_family_id">
+                                            <t t-out="doc.dsl_family_id.acronym"/>
+                                            <t t-if="doc.dsl_version_id">
+                                                (<t t-out="doc.dsl_version_id.version"/> -
+                                                <t t-out="dict(doc.dsl_version_id._fields['status'].selection).get(doc.dsl_version_id.status)"/>)
+                                            </t>
+                                        </t>
                                         <t t-else="">—</t>
                                     </td>
                                     <td>

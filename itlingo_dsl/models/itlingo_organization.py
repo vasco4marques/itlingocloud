@@ -10,7 +10,7 @@ class ItlingoOrganization(models.Model):
         "organization_id",
         "dsl_id",
         string="Allowed DSLs",
-        domain="[('status', '=', 'active')]",
+        domain="[('status', '=', 'active'), ('family_id.active', '=', True)]",
         help="DSLs this organization may use. If empty, the organization may "
              "use all active platform DSLs.",
     )

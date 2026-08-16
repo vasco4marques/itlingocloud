@@ -17,6 +17,58 @@ class TestTextRenderer(unittest.TestCase):
 
         self.assertEqual(output.decode("utf-8"), "# Caf\u00e9\n\n")
 
+    def test_excises_unclosed_block_and_renders_surrounding_lines(self):
+        output = render_text(
+            b"before\n{% for item in items %}\ninside\nafter\n",
+            {"items": [1]},
+        ).decode("utf-8")
+
+        self.assertIn("before\n", output)
+        self.assertIn("TEMPLATE ERROR (line 2)", output)
+        self.assertIn("inside\nafter\n", output)
+
+    def test_excises_unknown_filter(self):
+        output = render_text(b"before\n{{ 1|nosuchfilter }}\nafter\n", {})
+
+        self.assertIn("TEMPLATE ERROR (line 2)", output.decode("utf-8"))
+
+    def test_marks_runtime_specification_error(self):
+        output = render_text(b"{{ M.get(L) }}\n", {"M": {}, "L": [1]})
+
+        text = output.decode("utf-8")
+        self.assertIn("INCOMPATIBLE WITH SPECIFICATION (line 1)", text)
+        self.assertIn("unhashable type: 'list'", text)
+
+    def test_collapses_multiline_runtime_error_marker(self):
+        class Broken:
+            def fail(self):
+                raise ValueError("first line\nsecond line")
+
+        output = render_text(
+            b"before\n{{ broken.fail() }}\nafter\n",
+            {"broken": Broken()},
+        ).decode("utf-8")
+
+        self.assertIn(
+            "INCOMPATIBLE WITH SPECIFICATION (line 2): "
+            "first line second line\n",
+            output,
+        )
+        self.assertIn("after\n", output)
+
+
+    def test_excises_cascading_template_errors(self):
+        output = render_text(
+            b"before\n{% for %}\ninside\n{% endfor %}\nafter\n",
+            {},
+        ).decode("utf-8")
+
+        self.assertIn("TEMPLATE ERROR (line 2)", output)
+        self.assertIn("TEMPLATE ERROR (line 4)", output)
+        self.assertIn("before\n", output)
+        self.assertIn("inside\n", output)
+        self.assertIn("after\n", output)
+
     def test_rejects_non_utf8_template_bytes(self):
         with self.assertRaises(UnicodeDecodeError):
             render_text(b"\xff\xfe", {})

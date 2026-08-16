@@ -40,22 +40,27 @@ class DslParseError(Exception):
 
 
 def is_templatable_dsl(env, dsl):
-    """Whether *dsl* has a parser source that is safe to use for generation."""
+    """Whether *dsl* is a ready active or draft generation target."""
     if not dsl:
         return False
     technical_dsl = dsl.sudo() if hasattr(dsl, "sudo") else dsl
+    if technical_dsl.status not in ("active", "draft"):
+        return False
     grammar = (
         technical_dsl._grammar_file()
         if hasattr(technical_dsl, "_grammar_file") else False
     )
     grammar_is_ready = bool(
-        technical_dsl.status == "active"
-        and grammar
+        grammar
         and technical_dsl.grammar_validation_result == "valid"
         and technical_dsl.grammar_validation_is_current
-        and technical_dsl.published_digest
-        and technical_dsl.published_digest == technical_dsl._grammar_digest()
     )
+    if technical_dsl.status == "active":
+        grammar_is_ready = bool(
+            grammar_is_ready
+            and technical_dsl.published_digest
+            and technical_dsl.published_digest == technical_dsl._grammar_digest()
+        )
     if not grammar_is_ready:
         return False
 
@@ -158,23 +163,45 @@ def scoped_spec_sources(env, dsl, scope_document):
     return sources
 
 
+def _attribute_diagnostics(diagnostics, spans):
+    attributed = []
+    for diagnostic in diagnostics or ():
+        attributed_diagnostic = dict(diagnostic)
+        line = attributed_diagnostic.get("line")
+        if not isinstance(line, int) or isinstance(line, bool) or line < 1:
+            attributed.append(attributed_diagnostic)
+            continue
+        owner = None
+        for start_line, name in spans or ():
+            if isinstance(start_line, int) and start_line <= line:
+                owner = start_line, name
+        if owner is None:
+            attributed.append(attributed_diagnostic)
+            continue
+        start_line, name = owner
+        attributed_diagnostic["file"] = name
+        attributed_diagnostic["line"] = line - start_line + 1
+        attributed.append(attributed_diagnostic)
+    return attributed
+
+
 def parse_dsl(
     env, dsl, source_bytes, *, import_sources=None, scope_document=None,
     source_name="<uploaded specification>",
 ):
     """Parse DSL source bytes and return the serialized AST dict.
 
-    The ``itlingo.dsl`` record supplies the published, validated grammar and
-    the record-level validation policy.
-
+    The ``itlingo.dsl`` record supplies the validated grammar and the
+    record-level validation policy.
+    
     Raises ``DslParseError`` on parse errors (with diagnostics) or
     ``RuntimeError`` on infrastructure problems (missing bundle, node not found,
     timeout).
     """
     if not dsl or isinstance(dsl, str) or not is_templatable_dsl(env, dsl):
         raise RuntimeError(
-            "Template generation requires an active DSL with a current, "
-            "valid published grammar and current compiled services module."
+            "Template generation requires an active or draft DSL with a "
+            "current, valid grammar and current compiled services module."
         )
     technical_dsl = dsl.sudo() if hasattr(dsl, "sudo") else dsl
     config = _record_parser_config(technical_dsl)
@@ -192,11 +219,12 @@ def parse_dsl(
             if scope_document else []
         )
     try:
-        flattened_source = flatten_spec(
+        flattened = flatten_spec(
             source_text,
             import_sources,
             entry_name=source_name,
-        ).encode("utf-8")
+        )
+        flattened_source = flattened.text.encode("utf-8")
     except SpecFlattenError as err:
         diagnostic = {
             "severity": 1,
@@ -281,7 +309,9 @@ def parse_dsl(
     if not result.get("success"):
         raise DslParseError(
             result.get("error") or "%s could not be parsed." % label,
-            diagnostics=result.get("diagnostics"),
+            diagnostics=_attribute_diagnostics(
+                result.get("diagnostics"), flattened.spans,
+            ),
         )
 
     return result.get("ast") or {}

@@ -46,6 +46,26 @@ class TestMultiOutput(unittest.TestCase):
             "CREATE TABLE Order (id INTEGER PRIMARY KEY);\n",
         )
 
+    def test_body_failure_does_not_drop_later_outputs(self):
+        outputs = render_outputs(
+            b"{# output: broken.txt #}\n"
+            b"{{ M.get(L) }}\n"
+            b"{# endoutput #}\n"
+            b"{# output: valid.txt #}\n"
+            b"ok\n"
+            b"{# endoutput #}\n",
+            {"M": {}, "L": [1]},
+        )
+
+        data = build_zip(outputs)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.namelist(), ["broken.txt", "valid.txt"])
+            self.assertIn(
+                b"INCOMPATIBLE WITH SPECIFICATION (line 1)",
+                archive.read("broken.txt"),
+            )
+            self.assertEqual(archive.read("valid.txt"), b"ok\n")
+
     def test_preserves_crlf_body_line_endings(self):
         outputs = render_outputs(
             b"{# output: a.py #}\r\n"
@@ -56,6 +76,22 @@ class TestMultiOutput(unittest.TestCase):
         )
 
         self.assertEqual(outputs, [("a.py", b"first\r\nsecond line\r\n")])
+
+    def test_preserves_crlf_template_breaks_but_not_context_breaks(self):
+        outputs = render_outputs(
+            b"{# output: a.py #}\r\n"
+            b"first\r\n"
+            b"value: {{ value }}\r\n"
+            b"last\r\n"
+            b"{# endoutput #}\r\n",
+            {"value": "embedded\nnewline"},
+        )
+
+        self.assertEqual(
+            outputs,
+            [("a.py", b"first\r\nvalue: embedded\nnewline\r\nlast\r\n")],
+        )
+
 
     def test_single_block_is_still_bundle_mode(self):
         outputs = render_outputs(

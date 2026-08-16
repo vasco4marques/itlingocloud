@@ -755,7 +755,7 @@ class ITLingoPortal(CustomerPortal):
     _DOC_SORT_FIELDS = {
         'name': 'name',
         'type': 'document_type_id',
-        'dsl': 'dsl_id',
+        'dsl': 'dsl_family_id',
         'language': 'language',
         'format': 'document_format',
         'create_date': 'creation_date',
@@ -808,19 +808,19 @@ class ITLingoPortal(CustomerPortal):
             filter_args['type_id'] = type_ids
         no_dsl = params.get('no_dsl') == '1'
         if no_dsl:
-            domain.append(('dsl_id', '=', False))
+            domain.append(('dsl_family_id', '=', False))
             filter_args['no_dsl'] = '1'
-            dsl_ids = []
+            dsl_family_ids = []
         else:
-            dsl_ids = []
-            for raw in self._portal_multi_params('dsl_id'):
+            dsl_family_ids = []
+            for raw in self._portal_multi_params('dsl_family_id'):
                 try:
-                    dsl_ids.append(int(raw))
+                    dsl_family_ids.append(int(raw))
                 except (TypeError, ValueError):
                     pass
-            if dsl_ids:
-                domain.append(('dsl_id', 'in', dsl_ids))
-                filter_args['dsl_id'] = dsl_ids
+            if dsl_family_ids:
+                domain.append(('dsl_family_id', 'in', dsl_family_ids))
+                filter_args['dsl_family_id'] = dsl_family_ids
         statuses = [
             s for s in self._portal_multi_params('status')
             if s in dict(Document._fields['status'].selection)
@@ -853,14 +853,13 @@ class ITLingoPortal(CustomerPortal):
                 'language': languages,
                 'format': doc_formats,
                 'type_id': type_ids,
-                'dsl_id': dsl_ids,
+                'dsl_family_id': dsl_family_ids,
                 'no_dsl': no_dsl,
                 'status': statuses,
             },
             'doc_types': request.env['itlingo.document.type'].sudo().search(
                 [], order='name'),
-            'dsls': request.env['itlingo.dsl'].sudo().search(
-                [], order='acronym, version desc'),
+            **self._portal_document_form_meta(),
             'doc_language_selection': Document._fields['language'].selection,
             'doc_format_selection': Document._fields['document_format'].selection,
             'doc_status_selection': Document._fields['status'].selection,
@@ -889,29 +888,78 @@ class ITLingoPortal(CustomerPortal):
             domain.append(('status', '=', 'published'))
         return domain
 
+    def _portal_is_admin(self):
+        return request.env.user.has_group(
+            'itlingo_organizations.group_itlingo_admin',
+        )
+
+    def _portal_visible_dsl_families(self):
+        Family = request.env['itlingo.dsl.family'].sudo()
+        if self._portal_is_admin():
+            return Family.search([], order='acronym, name')
+        return Family.search(
+            [('active', '=', True)],
+            order='acronym, name',
+        )
+
+    def _portal_visible_dsl_versions(self, families=None):
+        Dsl = request.env['itlingo.dsl'].sudo()
+        families = families if families is not None else self._portal_visible_dsl_families()
+        versions = Dsl.search([
+            ('family_id', 'in', families.ids),
+            ('status', 'in', ('active', 'deprecated', 'draft')),
+        ], order='family_id, version desc')
+        if self._portal_is_admin():
+            return versions
+        return versions.filtered(lambda version: version.status != 'draft' or (
+            request.env.user in version.family_id.maintainer_ids
+        ))
+
     def _portal_document_form_meta(self):
         """Dropdown data for the shared Language / DSL form fields."""
         Document = request.env['itlingo.document'].sudo()
+        families = self._portal_visible_dsl_families()
         return {
-            'dsls': request.env['itlingo.dsl'].sudo().search(
-                [], order='acronym, version desc'),
+            'dsl_families': families,
+            'dsl_versions': self._portal_visible_dsl_versions(families),
             'doc_language_selection': Document._fields['language'].selection,
             'template_file_accept': SUPPORTED_TEMPLATE_ACCEPT,
         }
 
     def _portal_document_meta_vals(self, post):
-        """Parse the shared Language / DSL form inputs into write values."""
+        """Parse and validate the shared Language / DSL form inputs."""
         Document = request.env['itlingo.document'].sudo()
+        Family = request.env['itlingo.dsl.family'].sudo()
+        Dsl = request.env['itlingo.dsl'].sudo()
         language = (post.get('language') or '').strip()
         if language not in dict(Document._fields['language'].selection):
             language = False
         try:
-            dsl_id = int(post.get('dsl_id') or 0)
+            family_id = int(post.get('dsl_family_id') or 0)
         except (TypeError, ValueError):
-            dsl_id = 0
-        if dsl_id and not request.env['itlingo.dsl'].sudo().browse(dsl_id).exists():
-            dsl_id = 0
-        return {'language': language, 'dsl_id': dsl_id or False}
+            family_id = 0
+        try:
+            version_id = int(post.get('dsl_version_id') or 0)
+        except (TypeError, ValueError):
+            version_id = 0
+        family = Family.browse(family_id) if family_id else Family.browse()
+        version = Dsl.browse(version_id) if version_id else Dsl.browse()
+        visible_families = self._portal_visible_dsl_families()
+        if family_id and family not in visible_families:
+            raise ValidationError(_('Invalid DSL family.'))
+        if version_id and (
+            not version.exists()
+            or version.family_id != family
+            or version not in self._portal_visible_dsl_versions(visible_families)
+        ):
+            raise ValidationError(_('Invalid DSL version for the selected family.'))
+        if version_id and not family_id:
+            raise ValidationError(_('A DSL version requires a DSL family.'))
+        return {
+            'language': language,
+            'dsl_family_id': family.id or False,
+            'dsl_version_id': version.id or False,
+        }
 
     def _portal_ws_document_or_404(self, project_id, document_id):
         """Return (project, user_role, document) for a workspace document.
@@ -1016,7 +1064,8 @@ class ITLingoPortal(CustomerPortal):
                 'status': document.status,
                 'version': document.version or '',
                 'language': document.language or '',
-                'dsl_id': document.dsl_id.id or '',
+                'dsl_family_id': document.dsl_family_id.id or '',
+                'dsl_version_id': document.dsl_version_id.id or '',
                 'output_filename_pattern': (
                     document.output_filename_pattern or '' if has_pattern else ''
                 ),
@@ -1055,28 +1104,33 @@ class ITLingoPortal(CustomerPortal):
                     'grounding knowledge.',
                 )
             else:
-                write_vals = {
-                    'name': name,
-                    'document_type_id': type_id or False,
-                    'dsl_knowledge': dsl_knowledge,
-                    'status': final_status,
-                    'version': version or document.version,
-                    **self._portal_document_meta_vals(post),
-                }
-                if has_pattern:
-                    is_tpl_type = bool(template_type_id) and type_id == template_type_id
-                    write_vals['output_filename_pattern'] = (
-                        output_pattern if is_tpl_type else False
-                    )
-                if upload and upload.filename:
-                    write_vals['file_name'] = upload.filename
-                    write_vals['document_file'] = base64.b64encode(upload.read())
                 try:
-                    document.sudo().write(write_vals)
+                    meta_vals = self._portal_document_meta_vals(post)
                 except (UserError, ValidationError) as err:
                     values['error']['_form'] = str(err)
                 else:
-                    return request.redirect(f'{doc_base_url}/{document.id}?message=saved')
+                    write_vals = {
+                        'name': name,
+                        'document_type_id': type_id or False,
+                        'dsl_knowledge': dsl_knowledge,
+                        'status': final_status,
+                        'version': version or document.version,
+                        **meta_vals,
+                    }
+                    if has_pattern:
+                        is_tpl_type = bool(template_type_id) and type_id == template_type_id
+                        write_vals['output_filename_pattern'] = (
+                            output_pattern if is_tpl_type else False
+                        )
+                    if upload and upload.filename:
+                        write_vals['file_name'] = upload.filename
+                        write_vals['document_file'] = base64.b64encode(upload.read())
+                    try:
+                        document.sudo().write(write_vals)
+                    except (UserError, ValidationError) as err:
+                        values['error']['_form'] = str(err)
+                    else:
+                        return request.redirect(f'{doc_base_url}/{document.id}?message=saved')
         return request.render('itlingo_documents.portal_document_edit', values)
 
     @route(
@@ -1123,20 +1177,20 @@ class ITLingoPortal(CustomerPortal):
                 if upload and upload.filename:
                     fname = upload.filename
                     file_b64 = base64.b64encode(upload.read())
-                doc_vals = {
-                    'name': name,
-                    'organization_id': org_id,
-                    'document_type_id': type_id or False,
-                    'document_file': file_b64 or False,
-                    'file_name': fname or False,
-                    'status': 'draft',
-                    'creator_id': request.env.user.id,
-                    **self._portal_document_meta_vals(post),
-                }
-                self._apply_template_vals(doc_vals, post)
                 try:
+                    doc_vals = {
+                        'name': name,
+                        'organization_id': org_id,
+                        'document_type_id': type_id or False,
+                        'document_file': file_b64 or False,
+                        'file_name': fname or False,
+                        'status': 'draft',
+                        'creator_id': request.env.user.id,
+                        **self._portal_document_meta_vals(post),
+                    }
+                    self._apply_template_vals(doc_vals, post)
                     request.env['itlingo.document'].sudo().create(doc_vals)
-                except UserError as err:
+                except (UserError, ValidationError) as err:
                     values['error']['_form'] = str(err)
                 else:
                     return request.redirect(
@@ -1853,13 +1907,19 @@ class ITLingoPortal(CustomerPortal):
         ]
         doc_dsl_rows = [
             {
-                'label': f'{dsl.acronym} {dsl.version}'.strip() if dsl else 'No DSL',
+                'label': (
+                    f'{family.acronym} - {family.name}'.strip(' -')
+                    if family else 'No DSL'
+                ),
                 'count': count,
-                'url': f'{base_url}/documents?dsl_id={dsl.id}' if dsl else f'{base_url}/documents?no_dsl=1',
+                'url': (
+                    f'{base_url}/documents?dsl_family_id={family.id}'
+                    if family else f'{base_url}/documents?no_dsl=1'
+                ),
                 'color': palette[(i + 2) % len(palette)],
             }
-            for i, (dsl, count) in enumerate(Document._read_group(
-                doc_dom, groupby=['dsl_id'], aggregates=['__count'],
+            for i, (family, count) in enumerate(Document._read_group(
+                doc_dom, groupby=['dsl_family_id'], aggregates=['__count'],
             ))
         ]
 
@@ -2612,13 +2672,19 @@ class ITLingoPortal(CustomerPortal):
         ]
         doc_dsl_rows = [
             {
-                'label': f'{dsl.acronym} {dsl.version}'.strip() if dsl else 'No DSL',
+                'label': (
+                    f'{family.acronym} - {family.name}'.strip(' -')
+                    if family else 'No DSL'
+                ),
                 'count': count,
-                'url': f'{hub_prefix}/documents?dsl_id={dsl.id}' if dsl else f'{hub_prefix}/documents?no_dsl=1',
+                'url': (
+                    f'{hub_prefix}/documents?dsl_family_id={family.id}'
+                    if family else f'{hub_prefix}/documents?no_dsl=1'
+                ),
                 'color': palette[(i + 2) % len(palette)],
             }
-            for i, (dsl, count) in enumerate(Document._read_group(
-                doc_dom, groupby=['dsl_id'], aggregates=['__count'],
+            for i, (family, count) in enumerate(Document._read_group(
+                doc_dom, groupby=['dsl_family_id'], aggregates=['__count'],
             ))
         ]
         cards.append({
@@ -3120,20 +3186,20 @@ class ITLingoPortal(CustomerPortal):
                 if upload and upload.filename:
                     fname = upload.filename
                     file_b64 = base64.b64encode(upload.read())
-                doc_vals = {
-                    'name': name,
-                    'project_id': project_id,
-                    'document_type_id': type_id or False,
-                    'document_file': file_b64 or False,
-                    'file_name': fname or False,
-                    'status': 'draft',
-                    'creator_id': request.env.user.id,
-                    **self._portal_document_meta_vals(post),
-                }
-                self._apply_template_vals(doc_vals, post)
                 try:
+                    doc_vals = {
+                        'name': name,
+                        'project_id': project_id,
+                        'document_type_id': type_id or False,
+                        'document_file': file_b64 or False,
+                        'file_name': fname or False,
+                        'status': 'draft',
+                        'creator_id': request.env.user.id,
+                        **self._portal_document_meta_vals(post),
+                    }
+                    self._apply_template_vals(doc_vals, post)
                     request.env['itlingo.document'].sudo().create(doc_vals)
-                except UserError as err:
+                except (UserError, ValidationError) as err:
                     values['error']['_form'] = str(err)
                 else:
                     return request.redirect(

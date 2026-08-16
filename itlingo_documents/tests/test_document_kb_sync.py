@@ -29,6 +29,76 @@ class TestDocumentOwnership(TransactionCase):
             })
 
 @tagged('post_install', '-at_install')
+class TestDocumentDslFamily(TransactionCase):
+    def setUp(self):
+        super().setUp()
+        self.family_version = self.env['itlingo.dsl'].create({
+            'name': 'Document Family Test',
+            'acronym': 'DOCFAM',
+            'version': '1.0',
+            'status': 'active',
+            'file_extensions': '.docfam',
+        })
+        self.family = self.family_version.family_id
+        self.other_version = self.env['itlingo.dsl'].create({
+            'name': 'Document Family Test',
+            'acronym': 'DOCFAM',
+            'version': '2.0',
+            'status': 'draft',
+            'family_id': self.family.id,
+            'file_extensions': '.docfam',
+        })
+        self.organization = self.env['itlingo.organization'].create({
+            'name': 'Document Family Test Org',
+        })
+        self.workspace = self.env['itlingo.workspace'].create({
+            'name': 'Document Family Test Workspace',
+            'organization_id': self.organization.id,
+        })
+
+    def test_version_requires_matching_family(self):
+        with self.assertRaises(ValidationError):
+            self.env['itlingo.document'].create({
+                'name': 'Version Without Family',
+                'dsl_version_id': self.family_version.id,
+            })
+        with self.assertRaises(ValidationError):
+            self.env['itlingo.document'].create({
+                'name': 'Cross Family Version',
+                'dsl_family_id': self.env['itlingo.dsl.family'].create({
+                    'name': 'Other Family',
+                    'acronym': 'OTHER',
+                }).id,
+                'dsl_version_id': self.family_version.id,
+            })
+
+    def test_source_corpus_ignores_document_version_pins(self):
+        documents = self.env['itlingo.document'].create([
+            {
+                'name': 'Active Version Source',
+                'project_id': self.workspace.id,
+                'dsl_family_id': self.family.id,
+                'dsl_version_id': self.family_version.id,
+                'file_name': 'active.docfam',
+                'document_file': base64.b64encode(b'active'),
+            },
+            {
+                'name': 'Draft Version Source',
+                'project_id': self.workspace.id,
+                'dsl_family_id': self.family.id,
+                'dsl_version_id': self.other_version.id,
+                'file_name': 'draft.docfam',
+                'document_file': base64.b64encode(b'draft'),
+            },
+        ])
+        corpus = self.env['itlingo.document']._scoped_dsl_source_documents(
+            self.family_version,
+            project=self.workspace,
+        )
+        self.assertEqual(set(corpus.ids), set(documents.ids))
+
+
+@tagged('post_install', '-at_install')
 class TestDocumentFormat(TransactionCase):
 
     def test_format_tracks_dsl_publication_and_deprecation(self):
@@ -46,10 +116,10 @@ class TestDocumentFormat(TransactionCase):
 
         self.assertEqual(document.document_format, 'other')
 
-        dsl.write({'status': 'active'})
+        dsl.with_context(allow_dsl_lifecycle_write=True).write({'status': 'active'})
         self.assertEqual(document.document_format, 'text')
 
-        dsl.write({'status': 'deprecated'})
+        dsl.with_context(allow_dsl_lifecycle_write=True).write({'status': 'deprecated'})
         self.assertEqual(document.document_format, 'other')
 
 

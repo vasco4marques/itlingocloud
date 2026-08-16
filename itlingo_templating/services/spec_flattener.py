@@ -6,6 +6,7 @@ without reading arbitrary files: only scoped document content supplied by Odoo
 is appended to the uploaded entry specification.
 """
 
+from collections import namedtuple
 from dataclasses import dataclass
 import re
 
@@ -39,6 +40,9 @@ class SpecSource:
     identifier: str
     name: str
     text: str
+
+
+FlattenedSpec = namedtuple("FlattenedSpec", ("text", "spans"))
 
 
 def _line_number(text, offset):
@@ -126,7 +130,7 @@ def _package_can_supply(package, imported_namespace):
 
 
 def flatten_spec(entry_text, import_sources=(), entry_name="<uploaded specification>"):
-    """Return *entry_text* with its transitive imported packages appended.
+    """Return a :class:`FlattenedSpec` with imported packages appended.
 
     ``import_sources`` must contain :class:`SpecSource` instances. Sources with
     no ``Package`` declaration are ignored. Duplicate declarations of the same
@@ -195,6 +199,14 @@ def flatten_spec(entry_text, import_sources=(), entry_name="<uploaded specificat
                     included.add(source.identifier)
                     ordered.append(source)
 
-    return "\n\n".join(
-        source.text.rstrip() for source in ordered if source.text.strip()
-    ) + "\n"
+    parts = []
+    spans = []
+    start_line = 1
+    for source in ordered:
+        text = source.text.rstrip()
+        if not text.strip():
+            continue
+        parts.append(text)
+        spans.append((start_line, source.name))
+        start_line += text.count("\n") + 2
+    return FlattenedSpec("\n\n".join(parts) + "\n", spans)
