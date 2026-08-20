@@ -169,12 +169,33 @@ class TestTemplateLinter(BaseCase):
         clean = lint_template(clean_output.getvalue(), "xlsx", REFERENCE)
         self.assertFalse(clean["findings"])
 
+    def test_xlsx_column_a_markers_must_alternate_and_balance(self):
+        from openpyxl import Workbook
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Report"
+        sheet["A1"] = "{% endfor %}"
+        sheet["A2"] = "{% for item in requirements %}"
+        output = io.BytesIO()
+        workbook.save(output)
+
+        findings = extract_template_sources(output.getvalue(), "xlsx")["findings"]
+        structure = [item for item in findings if item["category"] == "structure"]
+        self.assertEqual(len(structure), 2)
+        self.assertTrue(all(item["severity"] == "warning" for item in structure))
+        self.assertEqual(
+            {item["location"] for item in structure},
+            {"Report!A1", "Report!A2"},
+        )
+
     def test_docx_unbalanced_table_row_markers_warn(self):
         from docx import Document
 
         output = io.BytesIO()
         document = Document()
-        document.add_paragraph("{%tr for item in requirements %}")
+        table = document.add_table(rows=1, cols=1)
+        table.cell(0, 0).paragraphs[0].text = "{%tr for item in requirements %}"
         document.save(output)
 
         result = lint_template(output.getvalue(), "docx", REFERENCE)
@@ -186,11 +207,93 @@ class TestTemplateLinter(BaseCase):
 
         clean_output = io.BytesIO()
         clean_document = Document()
-        clean_document.add_paragraph("{%tr for item in requirements %}")
-        clean_document.add_paragraph("{%tr endfor %}")
+        clean_table = clean_document.add_table(rows=2, cols=1)
+        clean_table.cell(0, 0).paragraphs[0].text = "{%tr for item in requirements %}"
+        clean_table.cell(1, 0).paragraphs[0].text = "{%tr endfor %}"
         clean_document.save(clean_output)
         clean_extracted = extract_template_sources(clean_output.getvalue(), "docx")
         self.assertFalse(clean_extracted["findings"])
+
+    def test_docx_control_tag_must_be_alone_in_paragraph(self):
+        from docx import Document
+
+        output = io.BytesIO()
+        document = Document()
+        document.add_paragraph("prefix")
+        paragraph = document.add_paragraph()
+        paragraph.add_run("{%p if root %}")
+        paragraph.add_run("visible")
+        document.save(output)
+
+        findings = extract_template_sources(output.getvalue(), "docx")["findings"]
+        structure = [item for item in findings if item["category"] == "structure"]
+        self.assertEqual(len(structure), 1)
+        self.assertEqual(structure[0]["severity"], "warning")
+        self.assertEqual(structure[0]["location"], "word/document.xml paragraph 1")
+
+    def test_docx_table_row_tag_must_be_inside_table_row(self):
+        from docx import Document
+
+        output = io.BytesIO()
+        document = Document()
+        document.add_paragraph("{%tr for item in requirements %}")
+        document.add_paragraph("{%tr endfor %}")
+        document.save(output)
+
+        findings = extract_template_sources(output.getvalue(), "docx")["findings"]
+        outside = [
+            item for item in findings
+            if item["category"] == "structure" and "not inside" in item["message"]
+        ]
+        self.assertEqual(len(outside), 2)
+
+    def test_docx_only_one_control_tag_per_paragraph(self):
+        from docx import Document
+
+        output = io.BytesIO()
+        document = Document()
+        document.add_paragraph("{%p if root %}{%p endif %}")
+        document.save(output)
+
+        findings = extract_template_sources(output.getvalue(), "docx")["findings"]
+        multiple = [
+            item for item in findings
+            if item["category"] == "structure" and "more than one" in item["message"]
+        ]
+        self.assertEqual(len(multiple), 1)
+
+    def test_docx_split_jinja_tag_across_runs_is_info(self):
+        from docx import Document
+
+        output = io.BytesIO()
+        document = Document()
+        paragraph = document.add_paragraph()
+        paragraph.add_run("{{ root.")
+        paragraph.add_run("title }}")
+        document.save(output)
+
+        findings = extract_template_sources(output.getvalue(), "docx")["findings"]
+        split = [
+            item for item in findings
+            if item["category"] == "structure" and item["severity"] == "info"
+        ]
+        self.assertEqual(len(split), 1)
+        self.assertIn("{{ root.title }}", split[0]["message"])
+        self.assertIn("word/document.xml paragraph 0", split[0]["message"])
+
+    def test_well_formed_docx_control_tags_have_no_structural_findings(self):
+        from docx import Document
+
+        output = io.BytesIO()
+        document = Document()
+        document.add_paragraph("{%p if root %}")
+        table = document.add_table(rows=2, cols=1)
+        table.cell(0, 0).paragraphs[0].text = "{%tr for item in requirements %}"
+        table.cell(1, 0).paragraphs[0].text = "{%tr endfor %}"
+        document.save(output)
+
+        findings = extract_template_sources(output.getvalue(), "docx")["findings"]
+        self.assertFalse(findings)
 
     def test_valid_bundle_fences_are_clean(self):
         result = lint_template(

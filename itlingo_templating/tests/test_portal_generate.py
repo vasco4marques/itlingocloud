@@ -206,6 +206,41 @@ class TestPortalGenerate(HttpCase):
         self.assertNotRegex(response.text, r"test-3\.0-draft\s*-\s*Draft")
         self.assertNotIn('<select class="form-select" id="target_dsl_id"', response.text)
 
+    def test_portal_user_can_read_deprecated_authored_version(self):
+        deprecated = self.env["itlingo.dsl"].create({
+            "family_id": self.family.id,
+            "name": "Template Source Language",
+            "acronym": "TSL",
+            "version": "test-0.9-deprecated",
+            "status": "deprecated",
+            "file_extensions": ".tsl",
+        })
+        self.document.write({"dsl_version_id": deprecated.id})
+
+        context = self.document.with_user(
+            self.portal_user,
+        )._templating_generation_context()
+
+        self.assertEqual(context["generation_target"], self.dsl)
+        self.assertFalse(context["generation_target_can_select"])
+        self.assertEqual(
+            context["generation_authored_version_label"],
+            deprecated.version,
+        )
+
+    def test_portal_user_can_read_document_with_inactive_family(self):
+        self.family.write({"active": False})
+
+        context = self.document.with_user(
+            self.portal_user,
+        )._templating_generation_context()
+
+        self.assertFalse(context["generation_target"])
+        self.assertEqual(
+            context["generation_target_label"],
+            "No active version",
+        )
+
     def test_maintainer_sees_all_drafts_and_multiple_drafts(self):
         self.authenticate("template_maintainer", "template_maintainer")
         try:

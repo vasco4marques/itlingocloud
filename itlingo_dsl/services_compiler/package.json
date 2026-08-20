@@ -10,7 +10,14 @@
   },
   "dependencies": {
     "esbuild": "0.25.12",
-    "langium": "4.3.1"
+    "langium": "4.3.1",
+    "compromise": "^14.9.0",
+    "de-compromise": "^0.0.10",
+    "es-compromise": "^0.2.9",
+    "fr-compromise": "^0.2.7",
+    "it-compromise": "^0.2.0",
+    "ja-compromise": "^0.0.1",
+    "pt-compromise": "^0.0.3"
   },
   "engines": {
     "node": ">=22.0.0"

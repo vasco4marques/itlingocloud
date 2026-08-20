@@ -1,6 +1,6 @@
 {
     'name': 'ITLingo Templating',
-    'version': '19.0.1.7.0',
+    'version': '19.0.1.8.0',
     'category': 'Services',
     'summary': 'Generate office and text documents, single or multi-file, from any published DSL',
     'description': """
@@ -21,6 +21,11 @@ output files with {# output: ... #} fences and download them as one ZIP.
         'views/itlingo_document_views.xml',
         'views/portal_generate.xml',
     ],
+    'assets': {
+        'web.assets_frontend': [
+            'itlingo_templating/static/src/js/generate_form.js',
+        ],
+    },
     'installable': True,
     'license': 'LGPL-3',
 }

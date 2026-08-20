@@ -376,7 +376,8 @@ class ITLingoIntegrationAPI(http.Controller):
             return error_resp
 
         dsl = request.env['itlingo.dsl'].sudo().browse(dsl_id)
-        if not dsl.exists() or dsl.status not in ('active', 'draft'):
+        if not dsl.exists() or dsl.status not in (
+                'active', 'draft', 'deprecated'):
             return Response(
                 json.dumps({'error': 'DSL not found'}),
                 status=404, content_type='application/json',
@@ -487,8 +488,11 @@ class ITLingoIntegrationAPI(http.Controller):
         """List DSLs (with grammar and optional services) for the ITOI LSP.
 
         Returns every ``active`` and ``draft`` DSL that has a grammar file.
-        Drafts are included on purpose so maintainers can test unpublished
-        grammars in ITOI; the consumer decides which version to prefer.
+        A ``deprecated`` DSL is included only when its family has no active or
+        draft version, so a deprecated grammar is a fallback rather than a
+        shadow of the current family grammar. Drafts are included on purpose so
+        maintainers can test unpublished grammars in ITOI; the consumer
+        decides which version to prefer.
         Authenticated with the same forwarded launch token as
         ``get-file-list`` / ``download-file``.
         """
@@ -497,8 +501,19 @@ class ITLingoIntegrationAPI(http.Controller):
             return error_resp
 
         dsls = request.env['itlingo.dsl'].sudo().search([
-            ('status', 'in', ['active', 'draft']),
+            ('status', 'in', ['active', 'draft', 'deprecated']),
         ])
+        current_families = {
+            dsl.family_id.id
+            for dsl in dsls
+            if dsl.status in ('active', 'draft')
+        }
+        dsls = dsls.filtered(
+            lambda dsl: (
+                dsl.status != 'deprecated'
+                or dsl.family_id.id not in current_families
+            )
+        )
         result = []
         for dsl in dsls:
             if not dsl._grammar_file():

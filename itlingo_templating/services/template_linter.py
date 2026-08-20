@@ -74,6 +74,7 @@ def _extract_xlsx(template_bytes):
     for sheet in workbook.worksheets:
         values = []
         cells = []
+        column_a_markers = []
         for row in sheet.iter_rows():
             for cell in row:
                 if isinstance(cell.value, str) and ("{{" in cell.value or "{%" in cell.value):
@@ -82,6 +83,37 @@ def _extract_xlsx(template_bytes):
                     findings.extend(_xlsx_structure_findings(
                         cell.value, sheet.title, cell.coordinate, cell.column,
                     ))
+                    if cell.column == 1:
+                        for marker in re.finditer(
+                            r"{%\s*(for\b[^%]*|endfor\s*)%}", cell.value,
+                        ):
+                            kind = "endfor" if marker.group(1).lstrip().startswith("endfor") else "for"
+                            column_a_markers.append((cell.coordinate, kind))
+        open_marker = None
+        for coordinate, kind in column_a_markers:
+            if kind == "for":
+                if open_marker is not None:
+                    findings.append(_finding(
+                        "warning", "structure",
+                        "XLSX column-A for/endfor markers must alternate and balance.",
+                        "for", location="%s!%s" % (sheet.title, coordinate),
+                    ))
+                else:
+                    open_marker = coordinate
+            elif open_marker is None:
+                findings.append(_finding(
+                    "warning", "structure",
+                    "XLSX column-A for/endfor markers must alternate and balance.",
+                    "endfor", location="%s!%s" % (sheet.title, coordinate),
+                ))
+            else:
+                open_marker = None
+        if open_marker is not None:
+            findings.append(_finding(
+                "warning", "structure",
+                "XLSX column-A for/endfor markers must alternate and balance.",
+                "for", location="%s!%s" % (sheet.title, open_marker),
+            ))
         if values:
             sources.append({
                 "text": "\n".join(values),
@@ -98,29 +130,94 @@ def _extract_xlsx(template_bytes):
 
 
 def _docx_structure_findings(template_bytes):
-    """Warn about the most reliably detectable docxtpl row-tag mismatch."""
+    """Check docxtpl's paragraph, row, and run conventions."""
     try:
         from lxml import etree
 
+        word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        paragraph_tag = "{%s}p" % word_namespace
+        row_tag = "{%s}tr" % word_namespace
+        run_tag = "{%s}r" % word_namespace
+        control_pattern = re.compile(r"{%\s*(?:p|tr)\b.*?%}")
+        jinja_pattern = re.compile(r"(\{\{.*?\}\}|\{%.*?%\})")
+        row_start_pattern = re.compile(r"{%\s*tr\s+for\b")
+        row_end_pattern = re.compile(r"{%\s*tr\s+endfor\b")
+        row_starts = 0
+        row_ends = 0
+        findings = []
         with zipfile.ZipFile(io.BytesIO(template_bytes)) as archive:
-            texts = []
-            for name in archive.namelist():
-                if name.startswith("word/") and name.endswith(".xml"):
-                    root = etree.fromstring(archive.read(name))
-                    texts.append("".join(root.itertext()))
+            for part_name in archive.namelist():
+                if not part_name.startswith("word/") or not part_name.endswith(".xml"):
+                    continue
+                root = etree.fromstring(archive.read(part_name))
+                for paragraph_index, paragraph in enumerate(root.iter(paragraph_tag)):
+                    text = "".join(paragraph.itertext())
+                    controls = list(control_pattern.finditer(text))
+                    location = "%s paragraph %s" % (part_name, paragraph_index)
+                    if len(controls) == 1:
+                        control = controls[0].group(0)
+                        if (text[:controls[0].start()] + text[controls[0].end():]).strip():
+                            control_kind = re.match(r"{%\s*(p|tr)\b", control).group(1)
+                            findings.append(_finding(
+                                "warning", "structure",
+                                "DOCX control tag `%s` is not alone in %s."
+                                % (control, location),
+                                control_kind,
+                                location=location,
+                            ))
+                    if len(controls) > 1:
+                        findings.append(_finding(
+                            "warning", "structure",
+                            "DOCX paragraph contains more than one control tag (%s) in %s."
+                            % (", ".join(match.group(0) for match in controls), location),
+                            "docx", location=location,
+                        ))
+                    if any(match.group(0).lstrip("{% ").startswith("tr") for match in controls):
+                        parent = paragraph.getparent()
+                        inside_row = False
+                        while parent is not None:
+                            if parent.tag == row_tag:
+                                inside_row = True
+                                break
+                            parent = parent.getparent()
+                        if not inside_row:
+                            findings.append(_finding(
+                                "warning", "structure",
+                                "DOCX table-row control tag is not inside a table row in %s."
+                                % location,
+                                "tr", location=location,
+                            ))
+
+                    runs = []
+                    offset = 0
+                    for run in paragraph.iter(run_tag):
+                        run_text = "".join(run.itertext())
+                        if run_text:
+                            runs.append((offset, offset + len(run_text)))
+                            offset += len(run_text)
+                    for match in jinja_pattern.finditer(text):
+                        if sum(
+                            start < match.end() and end > match.start()
+                            for start, end in runs
+                        ) > 1:
+                            findings.append(_finding(
+                                "info", "structure",
+                                "Jinja tag `%s` is split across Word runs in %s."
+                                % (match.group(0), location),
+                                "jinja", location=location,
+                            ))
+                    row_starts += len(row_start_pattern.findall(text))
+                    row_ends += len(row_end_pattern.findall(text))
+        if row_starts != row_ends:
+            findings.append(_finding(
+                "warning", "structure",
+                "DOCX table-row loop markers are unbalanced (%s start, %s end)."
+                % (row_starts, row_ends),
+                "tr", location="DOCX table rows",
+            ))
+        return findings
     except Exception:
         return []
-    text = "\n".join(texts)
-    starts = len(re.findall(r"{%\s*tr\s+for\b", text))
-    ends = len(re.findall(r"{%\s*tr\s+endfor\b", text))
-    if starts == ends:
-        return []
-    return [_finding(
-        "warning", "structure",
-        "DOCX table-row loop markers are unbalanced (%s start, %s end)."
-        % (starts, ends),
-        "tr", location="DOCX table rows",
-    )]
 
 
 def _xlsx_structure_findings(value, sheet_name, coordinate, column):

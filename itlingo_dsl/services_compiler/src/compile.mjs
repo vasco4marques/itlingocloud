@@ -13,6 +13,17 @@ import {build, version as esbuildVersion} from 'esbuild';
 const LANGIUM_VERSION = '4.3.1';
 const BUNDLE_VERSION = '1.1.0';
 const COMPILER_VERSION = `esbuild ${esbuildVersion} / langium ${LANGIUM_VERSION} / compiler ${BUNDLE_VERSION}`;
+const EXTERNAL_PACKAGES = [
+    'langium',
+    'vscode-languageserver-types',
+    'compromise',
+    'de-compromise',
+    'es-compromise',
+    'fr-compromise',
+    'it-compromise',
+    'ja-compromise',
+    'pt-compromise',
+];
 const COMPILER_DIRECTORY = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     '..',
@@ -147,7 +158,7 @@ async function main() {
             platform: 'node',
             format: 'esm',
             target: 'node22',
-            external: ['langium', 'vscode-languageserver-types'],
+            external: EXTERNAL_PACKAGES,
             write: false,
             logLevel: 'silent',
             charset: 'utf8',

@@ -73,6 +73,38 @@ class TestDslLifecycle(TransactionCase):
 
         self.assertEqual(dsl.status, 'draft')
 
+    def test_non_maintainer_can_read_deprecated_but_not_draft_metadata(self):
+        family = self.env['itlingo.dsl.family'].create({
+            'name': 'Lifecycle access language',
+            'acronym': 'LCAUTH',
+        })
+        deprecated = self.env['itlingo.dsl'].create({
+            'family_id': family.id,
+            'version': '0.9',
+            'status': 'deprecated',
+        })
+        draft = self.env['itlingo.dsl'].create({
+            'family_id': family.id,
+            'version': '1.0',
+            'status': 'draft',
+        })
+        reader = new_test_user(
+            self.env,
+            login='lifecycle_dsl_reader',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_member'
+            ),
+        )
+
+        self.assertEqual(
+            deprecated.with_user(reader).read(['version', 'status']),
+            [{'id': deprecated.id, 'version': '0.9', 'status': 'deprecated'}],
+        )
+        with self.assertRaises(AccessError):
+            draft.with_user(reader).read(['version', 'status'])
+
+
     def test_publish_invalid_grammar_is_rejected(self):
         dsl = self._make_draft('LCBAD', grammar=INVALID_GRAMMAR)
         with self.assertRaisesRegex(ValidationError, 'MissingRule'):

@@ -16,9 +16,10 @@ _logger = logging.getLogger(__name__)
 # grammar's language server instead of the published one.
 DRAFT_EXTENSION_SUFFIX = "-draft"
 
-# DSL lifecycle states whose files may be exchanged with ITOI. Deprecated DSLs
-# are intentionally excluded.
-IMPORTABLE_DSL_STATES = ("active", "draft")
+# DSL lifecycle states whose files may be exchanged with ITOI. Deprecated
+# versions contribute their plain extension only when no active or draft sibling
+# in the same family provides that extension.
+IMPORTABLE_DSL_STATES = ("active", "draft", "deprecated")
 
 
 def _read_attachment_base64(env, res_model, res_id, field_name):
@@ -300,45 +301,70 @@ class ItlingoDsl(models.Model):
 
     @api.model
     def _all_extensions(self):
-        """Return the importable extensions of every active or draft DSL.
+        """Return importable extensions from active, draft, and fallback DSLs.
 
         Published (``active``) DSLs contribute their extension verbatim.
         ``draft`` DSLs contribute a ``<ext>-draft`` variant so their
         in-progress grammar is served by a separate ITOI language server and
         never clashes with the published language. Deprecated DSLs contribute
-        nothing.
+        their plain extension only when no active or draft sibling in the same
+        family provides that extension.
         """
         extensions = set()
-        for dsl in self.sudo().search([
+        dsls = self.sudo().search([
             ("status", "in", IMPORTABLE_DSL_STATES),
             ("family_id.active", "=", True),
-        ]):
+        ])
+        current_extensions = {
+            (dsl.family_id.id, ext)
+            for dsl in dsls
+            if dsl.status in ("active", "draft")
+            for ext in dsl._extensions()
+        }
+        for dsl in dsls:
             suffix = DRAFT_EXTENSION_SUFFIX if dsl.status == 'draft' else ''
             for ext in dsl._extensions():
+                if (
+                    dsl.status == "deprecated"
+                    and (dsl.family_id.id, ext) in current_extensions
+                ):
+                    continue
                 extensions.add(ext + suffix)
         return extensions
 
     @api.model
     def _resolve_importable_extension(self, ext):
-        """Map the base extension of an exported file to its importable form.
+        """Map an exported file extension to its importable form.
 
-        Given the extension of a file being exported (case-insensitive, with
-        or without a leading dot or a trailing ``-draft`` suffix), return the
-        extension it must carry to be importable — ``<ext>-draft`` when the
-        matching DSL is a draft, the plain extension when it is active — or
-        ``None`` when *ext* does not belong to any active or draft DSL.
+        The lookup is case-insensitive and accepts an optional leading dot or
+        trailing ``-draft`` suffix. Active DSLs resolve to the plain extension;
+        drafts resolve to ``<ext>-draft`` when no active version provides it.
+        A deprecated DSL resolves to its plain extension only when no active or
+        draft sibling in the same family provides that extension. Deprecated
+        DSLs never produce a ``-draft`` variant.
         """
         raw = (ext or '').strip().lower().lstrip('.')
         if not raw:
             return None
         wants_draft = raw.endswith(DRAFT_EXTENSION_SUFFIX)
         base = raw[:-len(DRAFT_EXTENSION_SUFFIX)] if wants_draft else raw
+        dsls = self.sudo().search([
+            ("status", "in", IMPORTABLE_DSL_STATES),
+            ("family_id.active", "=", True),
+        ])
+        current_extensions = {
+            (dsl.family_id.id, candidate)
+            for dsl in dsls
+            if dsl.status in ("active", "draft")
+            for candidate in dsl._extensions()
+        }
         matches = [
-            dsl for dsl in self.sudo().search([
-                ("status", "in", IMPORTABLE_DSL_STATES),
-                ("family_id.active", "=", True),
-            ])
+            dsl for dsl in dsls
             if base in dsl._extensions()
+            and not (
+                dsl.status == "deprecated"
+                and (dsl.family_id.id, base) in current_extensions
+            )
         ]
         if not matches:
             return None
@@ -346,7 +372,7 @@ class ItlingoDsl(models.Model):
         has_draft = any(dsl.status == 'draft' for dsl in matches)
         # An explicit "-draft" request wins when a draft exists; otherwise the
         # published language is preferred, falling back to draft.
-        if (wants_draft and has_draft) or not has_active:
+        if (wants_draft and has_draft) or (not has_active and has_draft):
             return base + DRAFT_EXTENSION_SUFFIX
         return base
 

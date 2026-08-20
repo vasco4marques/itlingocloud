@@ -10,11 +10,11 @@ class TestImportableExtensions(TransactionCase):
         cls.settings = cls.env["itlingo.integration.settings"]._get_settings()
         cls.settings.importable_extensions = "txt,md"
 
-    def _new_dsl(self, acronym, file_extensions, status="active"):
+    def _new_dsl(self, acronym, file_extensions, status="active", version="test-1"):
         return self.env["itlingo.dsl"].create({
             "name": "DSL %s" % acronym,
             "acronym": acronym,
-            "version": "test-1",
+            "version": version,
             "status": status,
             "file_extensions": file_extensions,
         })
@@ -52,11 +52,24 @@ class TestImportableExtensions(TransactionCase):
         self.assertIn("msl", allowed)
         self.assertIn("msl2", allowed)
 
-    def test_deprecated_dsl_extensions_are_not_importable(self):
+    def test_deprecated_dsl_extensions_fall_back_without_current_sibling(self):
+        Dsl = self.env["itlingo.dsl"]
         self._new_dsl("DSL0", ".dsl0", status="deprecated")
         allowed = self.settings._get_importable_extensions()
-        self.assertNotIn("dsl0", allowed)
+        self.assertIn("dsl0", allowed)
+        self.assertIn("dsl0", Dsl._all_extensions())
+        self.assertEqual(Dsl._resolve_importable_extension("dsl0"), "dsl0")
         self.assertNotIn("dsl0-draft", allowed)
+        self.assertNotIn("dsl0-draft", Dsl._all_extensions())
+
+    def test_deprecated_dsl_extensions_are_shadowed_by_current_sibling(self):
+        Dsl = self.env["itlingo.dsl"]
+        self._new_dsl("DSL0", ".dsl0", status="deprecated", version="test-0.9")
+        self._new_dsl("DSL0", ".dsl0", status="active", version="test-1.0")
+        allowed = self.settings._get_importable_extensions()
+        self.assertIn("dsl0", allowed)
+        self.assertNotIn("dsl0-draft", allowed)
+        self.assertEqual(Dsl._resolve_importable_extension("dsl0"), "dsl0")
 
     def test_odoo_archived_dsl_extensions_are_not_importable(self):
         dsl = self._new_dsl("ZSL", ".zsl", status="active")

@@ -24,6 +24,18 @@ _PARSER_JS = os.path.join(_PARSER_DIR, "dist", "parser.mjs")
 _LANGIUM_PACKAGE = os.path.join(
     _PARSER_DIR, "node_modules", "langium", "package.json",
 )
+_NLP_PACKAGES = tuple(
+    os.path.join(_PARSER_DIR, "node_modules", package, "package.json")
+    for package in (
+        "compromise",
+        "de-compromise",
+        "es-compromise",
+        "fr-compromise",
+        "it-compromise",
+        "ja-compromise",
+        "pt-compromise",
+    )
+)
 
 _DEFAULT_NODE_PATH = "node"
 _DEFAULT_TIMEOUT = 30
@@ -206,6 +218,7 @@ def parse_dsl(
     technical_dsl = dsl.sudo() if hasattr(dsl, "sudo") else dsl
     config = _record_parser_config(technical_dsl)
     dsl_name = technical_dsl.acronym or technical_dsl.name or "DSL"
+    node_path, timeout = _config(env)
 
     try:
         source_text = source_bytes.decode("utf-8")
@@ -246,7 +259,6 @@ def parse_dsl(
             "`npm ci --omit=dev` in the parser/ folder or rebuild the container."
             % _LANGIUM_PACKAGE
         )
-    node_path, timeout = _config(env)
 
     with tempfile.TemporaryDirectory(prefix="itlingo-dsl-parser-") as temp_dir:
         grammar = os.path.join(temp_dir, "grammar.langium")
@@ -267,6 +279,27 @@ def parse_dsl(
         ]
         services_module = config["services_module"]
         if services_module:
+            # The compiled RSL services artifact imports the NLP packages at
+            # runtime; ASL and services-free DSLs never do. Checking the
+            # artifact instead of the installation keeps a deployment without
+            # those packages able to generate everything that does not need
+            # them, while still turning a partial RSL deployment into a clear
+            # operator error rather than an opaque ESM resolution failure in
+            # the parser subprocess.
+            if "compromise" in services_module:
+                missing_nlp = [
+                    path for path in _NLP_PACKAGES if not os.path.exists(path)
+                ]
+                if missing_nlp:
+                    packages = ", ".join(
+                        os.path.basename(os.path.dirname(path))
+                        for path in missing_nlp
+                    )
+                    raise RuntimeError(
+                        "DSL parser NLP runtime dependencies are missing "
+                        "(%s). Run `npm ci --omit=dev` in the parser/ folder "
+                        "or rebuild the container." % packages
+                    )
             services_path = os.path.join(temp_dir, "services.mjs")
             with open(services_path, "wb") as services_file:
                 services_file.write(services_module.encode("utf-8"))

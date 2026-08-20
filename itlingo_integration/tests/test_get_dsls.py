@@ -185,6 +185,67 @@ class TestGetDsls(HttpCase):
             "ITOIBROKEN", {item["acronym"] for item in payload["dsls"]},
         )
 
+    def test_get_dsls_omits_deprecated_version_when_family_is_current(self):
+        active = self.env["itlingo.dsl"].create({
+            "name": "ITOI current fallback family",
+            "acronym": "ITOICURRENT",
+            "version": "test-1",
+            "status": "active",
+        })
+        deprecated = self.env["itlingo.dsl"].create({
+            "family_id": active.family_id.id,
+            "version": "test-0",
+            "status": "draft",
+        })
+        self.File._create_grammar_text(
+            deprecated,
+            "Main.langium",
+            "grammar ITOICURRENT\nentry Model: 'model';\n",
+            is_entry=True,
+        )
+        deprecated.with_context(
+            allow_dsl_lifecycle_write=True,
+        ).write({"status": "deprecated"})
+
+        response = self.url_open(
+            "/token_api/get-dsls", headers=self._authorization_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        ids = {item["id"] for item in json.loads(response.text)["dsls"]}
+        self.assertNotIn(deprecated.id, ids)
+
+    def test_get_dsls_includes_deprecated_only_family(self):
+        deprecated = self.env["itlingo.dsl"].create({
+            "name": "ITOI deprecated fallback family",
+            "acronym": "ITOIDEPFALLBACK",
+            "version": "test-1",
+            "status": "draft",
+            "file_extensions": ".idf",
+        })
+        self.File._create_grammar_text(
+            deprecated,
+            "Main.langium",
+            "grammar ITOIDEPFALLBACK\nentry Model: 'model';\n",
+            is_entry=True,
+        )
+        deprecated.with_context(
+            allow_dsl_lifecycle_write=True,
+        ).write({"status": "deprecated"})
+
+        response = self.url_open(
+            "/token_api/get-dsls", headers=self._authorization_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = next(
+            item
+            for item in json.loads(response.text)["dsls"]
+            if item["id"] == deprecated.id
+        )
+        self.assertEqual(result["status"], "deprecated")
+
+
     def test_get_dsl_sources_is_limited_to_launch_workspace_and_organization(self):
         response = self.url_open(
             "/token_api/get-dsl-sources/%s" % self.dsl.id,
@@ -212,3 +273,20 @@ class TestGetDsls(HttpCase):
         )
         self.assertEqual(billing["packages"], ["p_Billing"])
         self.assertEqual(payload["conflicting_packages"], [])
+
+    def test_get_dsl_sources_accepts_deprecated_version(self):
+        deprecated = self.env["itlingo.dsl"].create({
+            "name": "ITOI deprecated source language",
+            "acronym": "ITOIDEPSOURCE",
+            "version": "test-1",
+            "status": "deprecated",
+        })
+        response = self.url_open(
+            "/token_api/get-dsl-sources/%s" % deprecated.id,
+            headers=self._authorization_headers({
+                "user": self.source_user.login,
+                "wsid": self.workspace.id,
+            }),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)

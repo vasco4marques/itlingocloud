@@ -31,7 +31,7 @@
         <field name="groups" eval="[(4, ref('base.group_portal'))]"/>
     </record>
 
-    <!-- DSL versions expose active versions and maintainers' drafts. -->
+    <!-- DSL version metadata for active and deprecated versions is public; drafts remain private to admins and family maintainers. -->
     <record id="itlingo_dsl_rule_admin" model="ir.rule">
         <field name="name">ITLingo DSL: admin sees all</field>
         <field name="model_id" ref="model_itlingo_dsl"/>
@@ -42,21 +42,21 @@
     <record id="itlingo_dsl_rule_manager" model="ir.rule">
         <field name="name">ITLingo DSL: active or maintained</field>
         <field name="model_id" ref="model_itlingo_dsl"/>
-        <field name="domain_force">['|', '&amp;', ('status', '=', 'active'), ('family_id.active', '=', True), ('family_id.maintainer_ids', 'in', [user.id])]</field>
+        <field name="domain_force">['|', '&amp;', ('status', 'in', ['active', 'deprecated']), ('family_id.active', '=', True), ('family_id.maintainer_ids', 'in', [user.id])]</field>
         <field name="groups" eval="[(4, ref('itlingo_organizations.group_itlingo_manager'))]"/>
     </record>
 
     <record id="itlingo_dsl_rule_member" model="ir.rule">
         <field name="name">ITLingo DSL: active or maintained</field>
         <field name="model_id" ref="model_itlingo_dsl"/>
-        <field name="domain_force">['|', '&amp;', ('status', '=', 'active'), ('family_id.active', '=', True), ('family_id.maintainer_ids', 'in', [user.id])]</field>
+        <field name="domain_force">['|', '&amp;', ('status', 'in', ['active', 'deprecated']), ('family_id.active', '=', True), ('family_id.maintainer_ids', 'in', [user.id])]</field>
         <field name="groups" eval="[(4, ref('itlingo_organizations.group_itlingo_member'))]"/>
     </record>
 
     <record id="itlingo_dsl_rule_portal" model="ir.rule">
         <field name="name">ITLingo DSL: active or maintained</field>
         <field name="model_id" ref="model_itlingo_dsl"/>
-        <field name="domain_force">['|', '&amp;', ('status', '=', 'active'), ('family_id.active', '=', True), ('family_id.maintainer_ids', 'in', [user.id])]</field>
+        <field name="domain_force">['|', '&amp;', ('status', 'in', ['active', 'deprecated']), ('family_id.active', '=', True), ('family_id.maintainer_ids', 'in', [user.id])]</field>
         <field name="groups" eval="[(4, ref('base.group_portal'))]"/>
     </record>
 

@@ -1404,6 +1404,15 @@ class TestDocumentDslControllerValidation(TransactionCase):
             password='document_family_editor',
             groups='base.group_portal',
         )
+        self.admin = new_test_user(
+            self.env,
+            login='document_family_admin',
+            password='document_family_admin',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_admin'
+            ),
+        )
         self.active_version = self.env['itlingo.dsl'].create({
             'name': 'Controller Family One',
             'acronym': 'CFONE',
@@ -1429,26 +1438,102 @@ class TestDocumentDslControllerValidation(TransactionCase):
             'family_id': self.family.id,
         })
 
-    def _portal_with_editor(self):
+    def _portal_with_user(self, user):
         from odoo.addons.itlingo_website_portal.controllers.portal import (
             ITLingoPortal,
         )
         return ITLingoPortal(), api.Environment(
-            self.env.cr, self.editor.id, dict(self.env.context),
+            self.env.cr, user.id, dict(self.env.context),
         )
 
-    def test_active_family_and_deprecated_provenance_are_visible(self):
+    def _portal_with_editor(self):
+        return self._portal_with_user(self.editor)
+
+    def test_regular_user_selectable_versions_exclude_deprecated_and_drafts(self):
         portal, editor_env = self._portal_with_editor()
         with patch(
             'odoo.addons.itlingo_website_portal.controllers.portal.request',
             SimpleNamespace(env=editor_env),
         ):
-            families = portal._portal_visible_dsl_families()
-            versions = portal._portal_visible_dsl_versions(families)
-        self.assertIn(self.family, families)
+            versions = portal._portal_selectable_dsl_versions()
+        self.assertIn(self.active_version, versions)
+        self.assertNotIn(self.deprecated_version, versions)
+        self.assertNotIn(self.draft_version, versions)
+
+    def test_family_maintainer_selectable_versions_include_own_drafts(self):
+        portal, maintainer_env = self._portal_with_user(self.maintainer)
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=maintainer_env),
+        ):
+            versions = portal._portal_selectable_dsl_versions()
+        self.assertIn(self.active_version, versions)
+        self.assertIn(self.draft_version, versions)
+        self.assertNotIn(self.deprecated_version, versions)
+
+    def test_admin_selectable_versions_include_all_statuses(self):
+        portal, admin_env = self._portal_with_user(self.admin)
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=admin_env),
+        ):
+            versions = portal._portal_selectable_dsl_versions()
         self.assertIn(self.active_version, versions)
         self.assertIn(self.deprecated_version, versions)
-        self.assertNotIn(self.draft_version, versions)
+        self.assertIn(self.draft_version, versions)
+
+    def test_deprecated_document_pin_is_in_edit_dropdown(self):
+        self.family.write({'active': False})
+        document = self.env['itlingo.document'].create({
+            'name': 'Deprecated DSL document',
+            'dsl_family_id': self.family.id,
+            'dsl_version_id': self.deprecated_version.id,
+        })
+        portal, editor_env = self._portal_with_editor()
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            meta = portal._portal_document_form_meta(document)
+        self.assertIn(self.family, meta['dsl_families'])
+        self.assertIn(self.deprecated_version, meta['dsl_versions'])
+
+    def test_deprecated_pin_is_only_accepted_for_that_document(self):
+        document = self.env['itlingo.document'].create({
+            'name': 'Deprecated DSL document',
+            'dsl_family_id': self.family.id,
+            'dsl_version_id': self.deprecated_version.id,
+        })
+        post = {
+            'dsl_family_id': self.family.id,
+            'dsl_version_id': self.deprecated_version.id,
+        }
+        portal, editor_env = self._portal_with_editor()
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal._',
+            lambda text: text,
+        ), patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            values = portal._portal_document_meta_vals(post, document)
+            self.assertEqual(values['dsl_version_id'], self.deprecated_version.id)
+            with self.assertRaises(ValidationError):
+                portal._portal_document_meta_vals(post)
+        active_document = self.env['itlingo.document'].create({
+            'name': 'Active DSL document',
+            'dsl_family_id': self.family.id,
+            'dsl_version_id': self.active_version.id,
+        })
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal._',
+            lambda text: text,
+        ), patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            with self.assertRaises(ValidationError):
+                portal._portal_document_meta_vals(post, active_document)
 
     def test_controller_rejects_cross_family_version(self):
         other = self.env['itlingo.dsl'].create({

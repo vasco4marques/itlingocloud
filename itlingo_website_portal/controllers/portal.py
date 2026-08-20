@@ -898,39 +898,52 @@ class ITLingoPortal(CustomerPortal):
         if self._portal_is_admin():
             return Family.search([], order='acronym, name')
         return Family.search(
-            [('active', '=', True)],
+            ['|', ('active', '=', True), ('maintainer_ids', 'in', [request.env.user.id])],
             order='acronym, name',
         )
 
-    def _portal_visible_dsl_versions(self, families=None):
+    def _portal_selectable_dsl_versions(self, families=None):
         Dsl = request.env['itlingo.dsl'].sudo()
         families = families if families is not None else self._portal_visible_dsl_families()
+        statuses = ('active', 'deprecated', 'draft') if self._portal_is_admin() else (
+            'active', 'draft',
+        )
         versions = Dsl.search([
             ('family_id', 'in', families.ids),
-            ('status', 'in', ('active', 'deprecated', 'draft')),
+            ('status', 'in', statuses),
         ], order='family_id, version desc')
         if self._portal_is_admin():
             return versions
-        return versions.filtered(lambda version: version.status != 'draft' or (
-            request.env.user in version.family_id.maintainer_ids
+        return versions.filtered(lambda version: version.status == 'active' or (
+            version.status == 'draft'
+            and request.env.user in version.family_id.maintainer_ids
         ))
 
-    def _portal_document_form_meta(self):
+    def _portal_document_form_meta(self, document=None):
         """Dropdown data for the shared Language / DSL form fields."""
         Document = request.env['itlingo.document'].sudo()
+        document = document.sudo() if document else None
         families = self._portal_visible_dsl_families()
+        versions = self._portal_selectable_dsl_versions(families)
+        retained_family = document.dsl_family_id if document else None
+        retained_version = document.dsl_version_id if document else None
+        if retained_family and retained_family not in families:
+            families += retained_family
+        if retained_version and retained_version not in versions:
+            versions += retained_version
         return {
             'dsl_families': families,
-            'dsl_versions': self._portal_visible_dsl_versions(families),
+            'dsl_versions': versions,
             'doc_language_selection': Document._fields['language'].selection,
             'template_file_accept': SUPPORTED_TEMPLATE_ACCEPT,
         }
 
-    def _portal_document_meta_vals(self, post):
+    def _portal_document_meta_vals(self, post, document=None):
         """Parse and validate the shared Language / DSL form inputs."""
         Document = request.env['itlingo.document'].sudo()
         Family = request.env['itlingo.dsl.family'].sudo()
         Dsl = request.env['itlingo.dsl'].sudo()
+        document = document.sudo() if document else None
         language = (post.get('language') or '').strip()
         if language not in dict(Document._fields['language'].selection):
             language = False
@@ -945,12 +958,21 @@ class ITLingoPortal(CustomerPortal):
         family = Family.browse(family_id) if family_id else Family.browse()
         version = Dsl.browse(version_id) if version_id else Dsl.browse()
         visible_families = self._portal_visible_dsl_families()
+        selectable_versions = self._portal_selectable_dsl_versions(
+            visible_families,
+        )
+        retained_family = document.dsl_family_id if document else None
+        retained_version = document.dsl_version_id if document else None
+        if retained_family and retained_family not in visible_families:
+            visible_families += retained_family
+        if retained_version and retained_version not in selectable_versions:
+            selectable_versions += retained_version
         if family_id and family not in visible_families:
             raise ValidationError(_('Invalid DSL family.'))
         if version_id and (
             not version.exists()
             or version.family_id != family
-            or version not in self._portal_visible_dsl_versions(visible_families)
+            or version not in selectable_versions
         ):
             raise ValidationError(_('Invalid DSL version for the selected family.'))
         if version_id and not family_id:
@@ -1056,7 +1078,7 @@ class ITLingoPortal(CustomerPortal):
             'doc_types': doc_types,
             'status_selection': status_selection,
             'template_type_id': template_type_id,
-            **self._portal_document_form_meta(),
+            **self._portal_document_form_meta(document),
             'form': {
                 'name': document.name,
                 'document_type_id': document.document_type_id.id or '',
@@ -1105,7 +1127,7 @@ class ITLingoPortal(CustomerPortal):
                 )
             else:
                 try:
-                    meta_vals = self._portal_document_meta_vals(post)
+                    meta_vals = self._portal_document_meta_vals(post, document)
                 except (UserError, ValidationError) as err:
                     values['error']['_form'] = str(err)
                 else:

@@ -18,7 +18,7 @@ class ItlingoDocument(models.Model):
     def _templating_generation_dsl(self):
         """Return the family target used by template authoring metadata."""
         self.ensure_one()
-        family = self.dsl_family_id
+        family = self.dsl_family_id.sudo()
         if not family:
             return self.env["itlingo.dsl"].browse()
         return self.env["itlingo.dsl"].search([
@@ -29,7 +29,7 @@ class ItlingoDocument(models.Model):
         """Build the authorized generation target context for portal pages."""
         self.ensure_one()
         empty = self.env["itlingo.dsl"].browse()
-        family = self.dsl_family_id
+        family = self.dsl_family_id.sudo()
         if not family or not family.active:
             target = empty
             choices = empty
@@ -61,7 +61,7 @@ class ItlingoDocument(models.Model):
                 or target.id not in choices.ids
             ):
                 target = active
-        authored_version = self.dsl_version_id
+        authored_version = self.dsl_version_id.sudo()
         states = dict(
             self.env["itlingo.dsl"]._fields["status"].selection,
         )

@@ -75,10 +75,13 @@ def _find_blocks(ws):
 
 def _expand_loops(ws, context, env):
     for for_row, body_row, end_row, var, expr in _find_blocks(ws):
+        marker = ws.cell(row=for_row, column=1)
         try:
             items = list(env.compile_expression(expr)(**context) or [])
-        except Exception:
-            items = []
+        except (ImportError, UnicodeDecodeError):
+            raise
+        except Exception as error:
+            raise _cell_error(ws.title, marker.coordinate, marker.value, error) from error
 
         template_cells = _snapshot_row(ws, body_row)
         # Remove the original body + the two marker rows; we re-insert below.
@@ -88,7 +91,7 @@ def _expand_loops(ws, context, env):
             ws.insert_rows(for_row + offset)
             local = dict(context)
             local[var] = item
-            _write_row(ws, for_row + offset, template_cells, local, env)
+            _write_row(ws, for_row + offset, template_cells, local, env, body_row)
 
 
 def _snapshot_row(ws, row_idx):
@@ -104,10 +107,14 @@ def _snapshot_row(ws, row_idx):
     return cells
 
 
-def _write_row(ws, row_idx, template_cells, context, env):
+def _write_row(ws, row_idx, template_cells, context, env, template_row=None):
     for column, value, style, number_format in template_cells:
         cell = ws.cell(row=row_idx, column=column)
-        cell.value = _render_value(value, context, env)
+        coordinate = ws.cell(
+            row=template_row if template_row is not None else row_idx,
+            column=column,
+        ).coordinate
+        cell.value = _render_value(value, context, env, ws.title, coordinate)
         cell._style = copy(style)
         cell.number_format = number_format
 
@@ -116,17 +123,35 @@ def _render_scalar_cells(ws, context, env):
     for row in ws.iter_rows():
         for cell in row:
             if isinstance(cell.value, str) and _JINJA_RE.search(cell.value):
-                cell.value = _render_value(cell.value, context, env)
+                cell.value = _render_value(
+                    cell.value, context, env, ws.title, cell.coordinate
+                )
 
 
-def _render_value(value, context, env):
+def _render_value(value, context, env, sheet_name, coordinate):
     if not isinstance(value, str) or not _JINJA_RE.search(value):
         return value
     try:
         rendered = env.from_string(value).render(**context)
-    except Exception:
-        return value
+    except (ImportError, UnicodeDecodeError):
+        raise
+    except Exception as error:
+        raise _cell_error(sheet_name, coordinate, value, error) from error
     return _coerce_number(rendered)
+
+
+def _cell_error(sheet_name, coordinate, value, error):
+    import jinja2
+
+    prefix = (
+        "XLSX template error: "
+        if isinstance(error, (jinja2.TemplateSyntaxError, jinja2.TemplateAssertionError))
+        else "XLSX template could not be rendered with this specification: "
+    )
+    return ValueError(
+        "%ssheet %s, cell %s contains %r: %s"
+        % (prefix, sheet_name, coordinate, value, str(error))
+    )
 
 
 def _coerce_number(text):
