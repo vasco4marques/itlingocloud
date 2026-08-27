@@ -73,12 +73,32 @@ class ItlingoTemplatingPortal(http.Controller):
         return f"{base_url}/{document_id}"
 
     def _render_detail(self, document, base_url, project_id=None, org_id=None,
-                       error=None, diagnostics=None, lint_result=None,
-                       target=None):
+                       ws_org_project_id=None, error=None, diagnostics=None,
+                       lint_result=None, target=None):
         """Render generation feedback in the normal scoped document page."""
         portal = ITLingoPortal()
         values = portal._prepare_portal_layout_values()
-        if org_id is not None:
+        if ws_org_project_id is not None:
+            project, workspace_role, org_role, scoped_document = (
+                portal._portal_ws_org_document_or_404(
+                    ws_org_project_id, document.id,
+                )
+            )
+            if not scoped_document:
+                raise MissingError(_("Document not found."))
+            values.update({
+                "project": project,
+                "user_role": workspace_role,
+                "document_scope": "organization",
+                "can_edit_document": bool(
+                    org_role and org_role.role in portal._DOC_EDIT_ORG_ROLES
+                ),
+                "page_name": "workspace_organization_document_detail",
+                **portal._portal_workspace_hub_common(
+                    project, "documentation", public_hub=False,
+                ),
+            })
+        elif org_id is not None:
             organization, user_role, scoped_document = (
                 portal._portal_org_document_or_404(org_id, document.id)
             )
@@ -135,6 +155,24 @@ class ItlingoTemplatingPortal(http.Controller):
             document.check_access("read")
         except AccessError:
             raise AccessError(_("You do not have access to this document."))
+        if not document.is_template:
+            raise MissingError(_("This document is not a template."))
+        return document
+
+    def _ws_org_template_document(self, project_id, document_id):
+        """Return a published organization template opened in a workspace.
+
+        The workspace grant is the authorization here: a user whose only role
+        is workspace membership fails _get_template_document's user-level
+        check_access("read") on an organization document.
+        """
+        _project, _workspace_role, _org_role, document = (
+            ITLingoPortal()._portal_ws_org_document_or_404(
+                project_id, document_id,
+            )
+        )
+        if not document:
+            raise MissingError(_("Document not found."))
         if not document.is_template:
             raise MissingError(_("This document is not a template."))
         return document
@@ -217,6 +255,17 @@ class ItlingoTemplatingPortal(http.Controller):
         )
 
     @http.route(
+        "/my/workspaces/<int:project_id>/documents/organization/<int:document_id>/generate",
+        type="http", auth="user", website=True, methods=["GET", "POST"],
+    )
+    def portal_generate_workspace_organization(self, project_id, document_id,
+                                               **post):
+        base_url = f"/my/workspaces/{project_id}/documents/organization"
+        return self._portal_generate(
+            document_id, base_url, ws_org_project_id=project_id, **post,
+        )
+
+    @http.route(
         "/my/organizations/<int:org_id>/documents/<int:document_id>/generate",
         type="http", auth="user", website=True, methods=["GET", "POST"],
     )
@@ -237,6 +286,18 @@ class ItlingoTemplatingPortal(http.Controller):
         )
 
     @http.route(
+        "/my/workspaces/<int:project_id>/documents/organization/<int:document_id>/check",
+        type="http", auth="user", website=True, methods=["POST"],
+    )
+    def portal_check_workspace_organization(self, project_id, document_id,
+                                            **post):
+        return self._portal_check(
+            document_id,
+            f"/my/workspaces/{project_id}/documents/organization",
+            ws_org_project_id=project_id, **post,
+        )
+
+    @http.route(
         "/my/organizations/<int:org_id>/documents/<int:document_id>/check",
         type="http", auth="user", website=True, methods=["POST"],
     )
@@ -247,8 +308,13 @@ class ItlingoTemplatingPortal(http.Controller):
         )
 
     def _portal_check(self, document_id, base_url, project_id=None, org_id=None,
-                      **post):
-        document = self._get_template_document(document_id)
+                      ws_org_project_id=None, **post):
+        if ws_org_project_id is not None:
+            document = self._ws_org_template_document(
+                ws_org_project_id, document_id,
+            )
+        else:
+            document = self._get_template_document(document_id)
         if project_id is not None and document.project_id.id != project_id:
             raise MissingError(_("Document not found."))
         if org_id is not None and document.organization_id.id != org_id:
@@ -259,11 +325,13 @@ class ItlingoTemplatingPortal(http.Controller):
         if target_error:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
-                error=target_error, target=target,
+                ws_org_project_id=ws_org_project_id, error=target_error,
+                target=target,
             )
         if not is_templatable_dsl(request.env, target):
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_("This DSL version is not ready for template checking."),
                 target=target,
             )
@@ -271,6 +339,7 @@ class ItlingoTemplatingPortal(http.Controller):
         if not fmt or not document.document_file:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_("Only supported template files with an attached file can be checked."),
                 target=target,
             )
@@ -292,12 +361,18 @@ class ItlingoTemplatingPortal(http.Controller):
             }
         return self._render_detail(
             document, base_url, project_id=project_id, org_id=org_id,
-            lint_result=result, target=target,
+            ws_org_project_id=ws_org_project_id, lint_result=result,
+            target=target,
         )
 
     def _portal_generate(self, document_id, base_url, project_id=None,
-                         org_id=None, **post):
-        document = self._get_template_document(document_id)
+                         org_id=None, ws_org_project_id=None, **post):
+        if ws_org_project_id is not None:
+            document = self._ws_org_template_document(
+                ws_org_project_id, document_id,
+            )
+        else:
+            document = self._get_template_document(document_id)
         if project_id is not None and document.project_id.id != project_id:
             raise MissingError(_("Document not found."))
         if org_id is not None and document.organization_id.id != org_id:
@@ -306,6 +381,7 @@ class ItlingoTemplatingPortal(http.Controller):
         if not fmt or not document.document_file:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_(
                     "Only supported template files with an attached file can be generated."
                 ),
@@ -318,11 +394,13 @@ class ItlingoTemplatingPortal(http.Controller):
         if target_error:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
-                error=target_error, target=target,
+                ws_org_project_id=ws_org_project_id, error=target_error,
+                target=target,
             )
         if not is_templatable_dsl(request.env, target):
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_(
                     "This DSL version does not have a current, valid grammar "
                     "and compiled services module."
@@ -335,11 +413,11 @@ class ItlingoTemplatingPortal(http.Controller):
         if request.httprequest.method != "POST":
             return request.redirect(self._detail_url(base_url, document.id) + "#generate")
 
-
         upload = request.httprequest.files.get("source_file")
         if not upload or not upload.filename:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_("Please upload a %s file.") % dsl_label(target),
                 target=target,
             )
@@ -349,6 +427,7 @@ class ItlingoTemplatingPortal(http.Controller):
         ):
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_("Please upload a %s file (%s).") % (
                     dsl_label(target),
                     ", ".join(source_extensions),
@@ -368,6 +447,7 @@ class ItlingoTemplatingPortal(http.Controller):
         except DslParseError as err:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=str(err), diagnostics=err.diagnostics, target=target,
             )
         except RuntimeError as err:
@@ -377,6 +457,7 @@ class ItlingoTemplatingPortal(http.Controller):
             )
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=str(err), target=target,
             )
 
@@ -389,6 +470,7 @@ class ItlingoTemplatingPortal(http.Controller):
             )
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_(
                     "The generation context could not be built from the "
                     "parsed specification: %s"
@@ -430,12 +512,14 @@ class ItlingoTemplatingPortal(http.Controller):
         except UnicodeDecodeError:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_("Text template files must be encoded as UTF-8."),
                 target=target,
             )
         except ImportError:
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_(
                     "The Python package required to render %s files is not "
                     "installed on the server." % fmt.upper()
@@ -446,6 +530,7 @@ class ItlingoTemplatingPortal(http.Controller):
             _logger.exception("%s rendering failed for document %s", fmt, document.id)
             return self._render_detail(
                 document, base_url, project_id=project_id, org_id=org_id,
+                ws_org_project_id=ws_org_project_id,
                 error=_("Document generation failed: %s") % err,
                 target=target,
             )

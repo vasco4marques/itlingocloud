@@ -116,3 +116,89 @@ for (const [name, source, message] of [
         }
     });
 }
+
+for (const source of [
+    "import {readdirSync} from 'node:fs';",
+    "import {readdirSync} from 'fs';",
+]) {
+    test(`rejects Node built-in import ${source}`, () => {
+        const root = workspace({
+            'services.ts': [
+                source,
+                'export default () => ({readdirSync});',
+            ].join('\n'),
+        });
+        const specifier = source.match(/from '([^']+)'/)[1];
+        try {
+            const proc = spawnSync(
+                process.execPath, [compilerPath, root, 'services.ts'], {encoding: 'utf8'},
+            );
+            const result = JSON.parse(proc.stdout);
+            assert.equal(result.ok, false);
+            assert.equal(result.js, '');
+            assert.ok(result.diagnostics.some((diagnostic) =>
+                diagnostic.severity === 'error'
+                && diagnostic.code === 'services-forbidden-import'
+                && diagnostic.path === 'services.ts'
+                && diagnostic.line >= 1
+                && /Node built-in/.test(diagnostic.message)
+                && diagnostic.message.includes(`"${specifier}"`),
+            ));
+        } finally {
+            rmSync(root, {recursive: true, force: true});
+        }
+    });
+}
+
+test('rejects Node built-in imports in non-entry author files', () => {
+    const root = workspace({
+        'services.ts': [
+            "import {readdirSync} from './lib/io.js';",
+            'export default () => ({readdirSync});',
+        ].join('\n'),
+        'lib/io.ts': [
+            "import {readdirSync} from 'node:fs/promises';",
+            'export {readdirSync};',
+        ].join('\n'),
+    });
+    try {
+        const proc = spawnSync(
+            process.execPath, [compilerPath, root, 'services.ts'], {encoding: 'utf8'},
+        );
+        const result = JSON.parse(proc.stdout);
+        assert.equal(result.ok, false);
+        assert.equal(result.js, '');
+        const diagnostic = result.diagnostics.find((item) =>
+            item.severity === 'error'
+            && item.code === 'services-forbidden-import'
+            && item.path === 'lib/io.ts'
+            && item.line >= 1
+            && item.message.includes('"node:fs/promises"'),
+        );
+        assert.ok(diagnostic);
+    } finally {
+        rmSync(root, {recursive: true, force: true});
+    }
+});
+
+test('keeps legitimate external packages external', () => {
+    const root = workspace({
+        'services.ts': [
+            "import {DefaultScopeProvider} from 'langium';",
+            "import nlp from 'compromise';",
+            'export default () => ({DefaultScopeProvider, nlp});',
+        ].join('\n'),
+    });
+    try {
+        const stdout = execFileSync(
+            process.execPath, [compilerPath, root, 'services.ts'], {encoding: 'utf8'},
+        );
+        const result = JSON.parse(stdout);
+        assert.equal(result.ok, true);
+        assert.deepEqual(result.diagnostics, []);
+        assert.match(result.js, /from "langium"/);
+        assert.match(result.js, /from "compromise"/);
+    } finally {
+        rmSync(root, {recursive: true, force: true});
+    }
+});

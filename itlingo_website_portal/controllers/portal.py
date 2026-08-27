@@ -1419,25 +1419,35 @@ class ITLingoPortal(CustomerPortal):
         params = request.params
         base_url = f'/my/organizations/{org_id}/users'
         OrgRole = request.env['itlingo.organization.role'].sudo()
+        can_see_all_members = user_role.role == 'org_manager'
 
+        # Only an org manager may see other members: the listing runs with
+        # sudo(), so the restriction has to be in the domain, and the filter
+        # parameters are ignored for everyone else so they cannot be used to
+        # probe for another user's name, login or role.
         domain = [
             ('organization_id', '=', org_id),
             ('state', '=', 'accepted'),
         ]
         url_args = {}
-        name_q = (params.get('name') or '').strip()
-        if name_q:
-            domain += ['|',
-                       ('user_id.name', 'ilike', f'%{name_q}%'),
-                       ('user_id.login', 'ilike', f'%{name_q}%')]
-            url_args['name'] = name_q
-        role_keys = [
-            key for key in self._ORG_ROLE_FILTER_KEYS
-            if params.get(f'role_{key}') == '1'
-        ]
-        if role_keys:
-            domain.append(('role', 'in', role_keys))
-            url_args.update({f'role_{key}': '1' for key in role_keys})
+        name_q = ''
+        role_keys = []
+        if can_see_all_members:
+            name_q = (params.get('name') or '').strip()
+            if name_q:
+                domain += ['|',
+                           ('user_id.name', 'ilike', f'%{name_q}%'),
+                           ('user_id.login', 'ilike', f'%{name_q}%')]
+                url_args['name'] = name_q
+            role_keys = [
+                key for key in self._ORG_ROLE_FILTER_KEYS
+                if params.get(f'role_{key}') == '1'
+            ]
+            if role_keys:
+                domain.append(('role', 'in', role_keys))
+                url_args.update({f'role_{key}': '1' for key in role_keys})
+        else:
+            domain.append(('user_id', '=', request.env.user.id))
 
         order, sortby, sortdir = self._portal_sort(params, {
             'user': 'user_id',
@@ -1449,7 +1459,7 @@ class ITLingoPortal(CustomerPortal):
             url_args = dict(url_args)
             url_args.update({'sortby': sortby, 'sortdir': sortdir})
 
-        members, member_count, page_detail = paginate(
+        members, _member_count, page_detail = paginate(
             OrgRole, domain, base_url, page,
             url_args=url_args, order=order,
         )
@@ -1466,7 +1476,7 @@ class ITLingoPortal(CustomerPortal):
             'organization': org,
             'user_role': user_role,
             'members': members,
-            'member_count': member_count,
+            'member_count': org.member_count,
             'pager': page_detail,
             'users_filters': {
                 'name': name_q,
@@ -1481,7 +1491,8 @@ class ITLingoPortal(CustomerPortal):
             'sortdir': sortdir,
             'sort_base_url': base_url,
             'sort_qs': sort_qs,
-            'can_manage_org_users': user_role.role == 'org_manager',
+            'can_manage_org_users': can_see_all_members,
+            'can_see_all_members': can_see_all_members,
             'org_users_error': params.get('error'),
             'org_users_message': params.get('message'),
             'page_name': 'organization_users',

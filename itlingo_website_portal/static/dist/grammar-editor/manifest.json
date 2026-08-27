@@ -551,7 +551,7 @@
     ]
   },
   "src/bootstrap.ts": {
-    "file": "grammar-editor-FK6WO4eY.js",
+    "file": "grammar-editor-C23ctb7r.js",
     "name": "bootstrap",
     "src": "src/bootstrap.ts",
     "isEntry": true,
@@ -560,7 +560,7 @@
     ]
   },
   "src/main.ts": {
-    "file": "chunks/main-DFD7papu.js",
+    "file": "chunks/main-BigEui_t.js",
     "name": "main",
     "src": "src/main.ts",
     "isDynamicEntry": true,
@@ -598,7 +598,7 @@
     ]
   },
   "style.css": {
-    "file": "assets/grammar-editor-sRYL__B5.css",
+    "file": "assets/grammar-editor-DMm5Zv2K.css",
     "src": "style.css"
   }
 }

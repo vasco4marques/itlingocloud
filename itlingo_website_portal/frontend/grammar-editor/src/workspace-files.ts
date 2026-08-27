@@ -4,6 +4,11 @@ export interface VersionedTextModel {
 
 export type WorkspaceFileType = 'grammar' | 'services';
 
+export const WORKSPACE_GROUPS: readonly {fileType: WorkspaceFileType; label: string}[] = [
+    {fileType: 'grammar', label: 'Grammar'},
+    {fileType: 'services', label: 'Extensions'},
+];
+
 export interface WorkspaceFile<TModel extends VersionedTextModel = VersionedTextModel> {
     id?: number;
     path: string;
@@ -78,6 +83,18 @@ export class WorkspaceFileRegistry<
         return [...this.files.values()].sort((left, right) => (
             left.path.localeCompare(right.path)
         ));
+    }
+
+    grouped(): {fileType: WorkspaceFileType; label: string; files: WorkspaceFile<TModel>[]}[] {
+        return WORKSPACE_GROUPS.flatMap(({fileType, label}) => {
+            const files = [...this.files.values()]
+                .filter((file) => file.fileType === fileType)
+                .sort((left, right) => (
+                    Number(right.isEntry) - Number(left.isEntry)
+                    || left.path.localeCompare(right.path)
+                ));
+            return files.length ? [{fileType, label, files}] : [];
+        });
     }
 
     refreshDirty(path: string): boolean {

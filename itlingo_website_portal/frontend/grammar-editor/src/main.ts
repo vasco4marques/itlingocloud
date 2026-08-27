@@ -252,9 +252,9 @@ export class GrammarEditorApp {
         for (const source of sources) {
             this.addModel(source);
         }
-        const initial = sources.find((source) => source.isEntry) || sources[0];
+        const initial = this.files.grouped()[0]?.files[0];
         this.editor = monaco.editor.create(this.editorHost, {
-            model: initial ? this.files.get(initial.path)?.model : null,
+            model: initial?.model ?? null,
             automaticLayout: true,
             readOnly: !this.canEdit,
             domReadOnly: !this.canEdit,
@@ -378,61 +378,20 @@ export class GrammarEditorApp {
     private renderFiles(): void {
         const fileErrors = this.fileErrorCounts();
         this.root.dataset.grammarFileErrors = JSON.stringify(fileErrors);
-        const nodes = this.files.sorted().map((file) => {
-            const row = document.createElement('div');
-            row.className = 'itlingo-grammar-file-row';
-            row.classList.toggle('active', file.path === this.activePath);
-            row.dataset.grammarFilePath = file.path;
-
-            const select = document.createElement('button');
-            select.type = 'button';
-            select.className = 'itlingo-grammar-file-select';
-            select.dataset.grammarFileSelect = file.path;
-            select.title = file.path;
-
-            const icon = document.createElement('i');
-            icon.className = file.isEntry
-                ? 'fa fa-star text-warning'
-                : file.fileType === 'services' ? 'fa fa-code' : 'fa fa-file-code-o';
-            icon.setAttribute('aria-hidden', 'true');
-            const label = document.createElement('span');
-            label.className = 'itlingo-grammar-file-label';
-            label.textContent = file.path;
-            select.append(icon, label);
-            if (file.dirty) {
-                const dirty = document.createElement('span');
-                dirty.className = 'itlingo-grammar-file-dirty';
-                dirty.title = 'Unsaved changes';
-                dirty.textContent = '●';
-                select.append(dirty);
-            }
-            const errorCount = fileErrors[file.path] || 0;
-            if (errorCount) {
-                const errors = document.createElement('span');
-                errors.className = 'badge rounded-pill bg-danger';
-                errors.dataset.grammarFileErrorCount = String(errorCount);
-                errors.textContent = String(errorCount);
-                select.append(errors);
-            }
-            row.append(select);
-
-            if (this.canEdit && file.id) {
-                const actions = document.createElement('div');
-                actions.className = 'itlingo-grammar-file-actions';
-                if (!file.isEntry) {
-                    actions.append(this.fileAction('star', 'Set as entry file', 'set-entry', file.path));
-                }
-                actions.append(
-                    this.fileAction('pencil', 'Rename file', 'rename', file.path),
-                    this.fileAction('trash', 'Delete file', 'delete', file.path),
-                );
-                row.append(actions);
-            }
-            return row;
-        });
+        const nodes: HTMLDivElement[] = [];
+        let fileRowCount = 0;
+        for (const group of this.files.grouped()) {
+            const header = document.createElement('div');
+            header.className = 'itlingo-grammar-file-group';
+            header.dataset.grammarFileGroup = group.fileType;
+            header.textContent = group.label;
+            nodes.push(header);
+            fileRowCount += group.files.length;
+            nodes.push(...group.files.map((file) => this.fileRow(file, fileErrors)));
+        }
         this.filesHost.replaceChildren(...nodes);
-        this.filesHost.classList.toggle('itlingo-grammar-files-empty', nodes.length === 0);
-        if (!nodes.length) {
+        this.filesHost.classList.toggle('itlingo-grammar-files-empty', fileRowCount === 0);
+        if (!fileRowCount) {
             this.filesHost.textContent = this.canEdit
                 ? 'No grammar or services files. Create one to begin.'
                 : 'This DSL has no grammar or services files.';
@@ -440,6 +399,62 @@ export class GrammarEditorApp {
         const active = this.files.get(this.activePath);
         this.filename.textContent = active?.path || 'No workspace file selected';
         this.root.dataset.grammarActiveFile = active?.path || '';
+    }
+
+    private fileRow(
+        file: WorkspaceFile<monaco.editor.ITextModel>,
+        fileErrors: Record<string, number>,
+    ): HTMLDivElement {
+        const row = document.createElement('div');
+        row.className = 'itlingo-grammar-file-row';
+        row.classList.toggle('active', file.path === this.activePath);
+        row.dataset.grammarFilePath = file.path;
+
+        const select = document.createElement('button');
+        select.type = 'button';
+        select.className = 'itlingo-grammar-file-select';
+        select.dataset.grammarFileSelect = file.path;
+        select.title = file.path;
+
+        const icon = document.createElement('i');
+        icon.className = file.isEntry
+            ? 'fa fa-star text-warning'
+            : file.fileType === 'services' ? 'fa fa-code' : 'fa fa-file-code-o';
+        icon.setAttribute('aria-hidden', 'true');
+        const label = document.createElement('span');
+        label.className = 'itlingo-grammar-file-label';
+        label.textContent = file.path;
+        select.append(icon, label);
+        if (file.dirty) {
+            const dirty = document.createElement('span');
+            dirty.className = 'itlingo-grammar-file-dirty';
+            dirty.title = 'Unsaved changes';
+            dirty.textContent = '●';
+            select.append(dirty);
+        }
+        const errorCount = fileErrors[file.path] || 0;
+        if (errorCount) {
+            const errors = document.createElement('span');
+            errors.className = 'badge rounded-pill bg-danger';
+            errors.dataset.grammarFileErrorCount = String(errorCount);
+            errors.textContent = String(errorCount);
+            select.append(errors);
+        }
+        row.append(select);
+
+        if (this.canEdit && file.id) {
+            const actions = document.createElement('div');
+            actions.className = 'itlingo-grammar-file-actions';
+            if (!file.isEntry) {
+                actions.append(this.fileAction('star', 'Set as entry file', 'set-entry', file.path));
+            }
+            actions.append(
+                this.fileAction('pencil', 'Rename file', 'rename', file.path),
+                this.fileAction('trash', 'Delete file', 'delete', file.path),
+            );
+            row.append(actions);
+        }
+        return row;
     }
 
     private fileAction(icon: string, title: string, action: string, path: string): HTMLButtonElement {
@@ -600,7 +615,7 @@ export class GrammarEditorApp {
             this.viewStates.delete(path);
             this.unregisterOverlayFile(path);
             if (wasActive) {
-                const next = this.files.sorted()[0];
+                const next = this.files.grouped()[0]?.files[0];
                 this.activePath = next?.path || '';
                 this.editor?.setModel(next?.model || null);
             }

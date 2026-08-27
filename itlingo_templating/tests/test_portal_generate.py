@@ -162,6 +162,17 @@ class TestPortalGenerate(HttpCase):
             "role": "ws_manager",
             "state": "accepted",
         })
+        cls.workspace_only_user = new_test_user(
+            cls.env,
+            login="template_workspace_only",
+            groups="base.group_portal",
+        )
+        cls.env["itlingo.project.role"].create({
+            "user_id": cls.workspace_only_user.id,
+            "project_id": cls.workspace.id,
+            "role": "ws_member",
+            "state": "accepted",
+        })
         cls.workspace_document = cls.env["itlingo.document"].create({
             "name": "Workspace report",
             "project_id": cls.workspace.id,
@@ -178,6 +189,10 @@ class TestPortalGenerate(HttpCase):
         cls.workspace_detail_url = (
             f"/my/workspaces/{cls.workspace.id}/documents/"
             f"{cls.workspace_document.id}"
+        )
+        cls.workspace_organization_detail_url = (
+            f"/my/workspaces/{cls.workspace.id}/documents/organization/"
+            f"{cls.document.id}"
         )
 
     def setUp(self):
@@ -393,6 +408,96 @@ class TestPortalGenerate(HttpCase):
         self.assertIn("Please upload a TSL specification file.", response.text)
         self.assertIn("Template Workspace Test", response.text)
         self.assertIn("Workspace report", response.text)
+
+    def test_workspace_organization_generation_downloads_output(self):
+        self.authenticate(
+            "template_workspace_only", "template_workspace_only",
+        )
+        detail_url = self.workspace_organization_detail_url
+        detail_response = self.url_open(detail_url)
+
+        self.assertEqual(detail_response.status_code, 200)
+        csrf_token = re.search(
+            r'name="csrf_token" value="([^"]+)"', detail_response.text,
+        ).group(1)
+        response = self.url_open(
+            detail_url + "/generate",
+            data={"csrf_token": csrf_token},
+            files={
+                "source_file": (
+                    "demo.tsl",
+                    b"specification demo requirement first",
+                    "text/plain",
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"demo")
+        self.assertEqual(
+            response.headers["Content-Type"], "text/x-python; charset=utf-8",
+        )
+        self.assertIn(".py", response.headers["Content-Disposition"])
+
+    def test_workspace_organization_generation_error_uses_workspace_detail(self):
+        self.authenticate(
+            "template_workspace_only", "template_workspace_only",
+        )
+        detail_url = self.workspace_organization_detail_url
+        detail_response = self.url_open(detail_url)
+
+        self.assertEqual(detail_response.status_code, 200)
+        csrf_token = re.search(
+            r'name="csrf_token" value="([^"]+)"', detail_response.text,
+        ).group(1)
+        response = self.url_open(
+            detail_url + "/generate",
+            data={"csrf_token": csrf_token},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Please upload a TSL specification file.", response.text)
+        self.assertIn("Template Workspace Test", response.text)
+
+    def test_workspace_organization_check_works_for_workspace_member(self):
+        self.authenticate(
+            "template_workspace_only", "template_workspace_only",
+        )
+        detail_url = self.workspace_organization_detail_url
+        detail_response = self.url_open(detail_url)
+
+        self.assertEqual(detail_response.status_code, 200)
+        csrf_token = re.search(
+            r'name="csrf_token" value="([^"]+)"', detail_response.text,
+        ).group(1)
+        response = self.url_open(
+            detail_url + "/check",
+            data={"csrf_token": csrf_token},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_workspace_member_cannot_use_canonical_organization_generation(self):
+        self.authenticate(
+            "template_workspace_only", "template_workspace_only",
+        )
+        response = self.url_open(
+            self.detail_url + "/generate", allow_redirects=False,
+        )
+
+        self.assertIn(response.status_code, (401, 403))
+
+    def test_workspace_organization_generation_rejects_workspace_document(self):
+        self.authenticate(
+            "template_workspace_only", "template_workspace_only",
+        )
+        response = self.url_open(
+            f"/my/workspaces/{self.workspace.id}/documents/organization/"
+            f"{self.workspace_document.id}/generate",
+            allow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 404)
 
     def test_template_check_renders_advisory_findings_without_spec(self):
         self.document.document_file = base64.b64encode(

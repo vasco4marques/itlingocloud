@@ -3,7 +3,21 @@ import path from "node:path";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { builtinModules } from "node:module";
 import { build, version as esbuildVersion } from "esbuild";
+var NODE_BUILTIN = new RegExp(
+  `^(?:node:|(?:${builtinModules.filter((name) => !name.startsWith("node:")).join("|")})$)`
+);
+var SERVICES_FORBIDDEN_IMPORT = {
+  name: "services-forbidden-import",
+  setup(build2) {
+    build2.onResolve({ filter: NODE_BUILTIN }, (args) => ({
+      errors: [{
+        text: `Services modules cannot import Node built-in modules ("${args.path}"). Disk, process and network access would desynchronise the cloud and editor corpora; use only the DSL AST and the allowed packages: langium, vscode-languageserver-types, compromise.`
+      }]
+    }));
+  }
+};
 var LANGIUM_VERSION = "4.3.1";
 var BUNDLE_VERSION = "1.1.0";
 var COMPILER_VERSION = `esbuild ${esbuildVersion} / langium ${LANGIUM_VERSION} / compiler ${BUNDLE_VERSION}`;
@@ -49,7 +63,7 @@ function normalizeDiagnostic(message, severity, workspacePath) {
     severity,
     message: message.text || String(message),
     ...diagnosticLocation(message.location, workspacePath),
-    code: message.id || "esbuild"
+    code: message.id || message.pluginName || "esbuild"
   };
 }
 async function smokeLoad(javascript) {
@@ -135,6 +149,7 @@ async function main() {
       format: "esm",
       target: "node22",
       external: EXTERNAL_PACKAGES,
+      plugins: [SERVICES_FORBIDDEN_IMPORT],
       write: false,
       logLevel: "silent",
       charset: "utf8",

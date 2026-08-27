@@ -78,6 +78,15 @@
     font-size: 0.8125rem;
 }
 
+.itlingo-grammar-file-group {
+    padding: 0.5rem 0.75rem 0.25rem;
+    color: #6c757d;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
 .itlingo-grammar-file-row {
     display: flex;
     min-width: 0;

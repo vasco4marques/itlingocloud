@@ -41183,21 +41183,28 @@ async function iq(e, t, n = Date.now, r = (e) => new Promise((t) => setTimeout(t
 }
 //#endregion
 //#region src/workspace-files.ts
-function aq(e, t) {
+var aq = [{
+	fileType: "grammar",
+	label: "Grammar"
+}, {
+	fileType: "services",
+	label: "Extensions"
+}];
+function oq(e, t) {
 	return `file:///itlingo-dsl/${e}/${t.split("/").map((e) => encodeURIComponent(e)).join("/")}`;
 }
-function oq(e) {
+function sq(e) {
 	if (e.endsWith(".langium")) return "grammar";
 	if (e.endsWith(".ts")) return "services";
 	throw Error("Workspace paths must end in .langium or .ts.");
 }
-function sq(e) {
+function cq(e) {
 	let t = e.trim(), n = t.split("/");
 	if (!t || t.includes("\0") || t.includes("\\") || t.startsWith("/")) throw Error("Use a non-empty relative path with forward slashes.");
 	if (n.some((e) => !e || e === "." || e === "..")) throw Error("Workspace paths cannot contain empty, '.' or '..' segments.");
-	return oq(t), t;
+	return sq(t), t;
 }
-var cq = class {
+var lq = class {
 	files = /* @__PURE__ */ new Map();
 	add(e) {
 		if (this.files.has(e.path)) throw Error(`The DSL workspace already contains '${e.path}'.`);
@@ -41208,6 +41215,16 @@ var cq = class {
 	}
 	sorted() {
 		return [...this.files.values()].sort((e, t) => e.path.localeCompare(t.path));
+	}
+	grouped() {
+		return aq.flatMap(({ fileType: e, label: t }) => {
+			let n = [...this.files.values()].filter((t) => t.fileType === e).sort((e, t) => Number(t.isEntry) - Number(e.isEntry) || e.path.localeCompare(t.path));
+			return n.length ? [{
+				fileType: e,
+				label: t,
+				files: n
+			}] : [];
+		});
 	}
 	refreshDirty(e) {
 		let t = this.required(e);
@@ -41246,7 +41263,7 @@ var cq = class {
 //#endregion
 //#region src/main.ts
 dl();
-async function lq(e, t = {}) {
+async function uq(e, t = {}) {
 	let n = await fetch(e, {
 		method: "POST",
 		credentials: "same-origin",
@@ -41264,12 +41281,12 @@ async function lq(e, t = {}) {
 	if (r.result === void 0) throw Error("The grammar server returned an empty response.");
 	return r.result;
 }
-function uq(e, t) {
+function dq(e, t) {
 	let n = e.querySelector(t);
 	if (!n) throw Error(`Grammar Editor element is missing: ${t}`);
 	return n;
 }
-function dq() {
+function fq() {
 	zx.getLanguages().some((e) => e.id === "langium") || (zx.register({
 		id: "langium",
 		extensions: [".langium"],
@@ -41322,7 +41339,7 @@ function dq() {
 		}
 	}));
 }
-var fq = class {
+var pq = class {
 	root;
 	dslId;
 	editorHost;
@@ -41338,7 +41355,7 @@ var fq = class {
 	filename;
 	problemsSummary;
 	problemsList;
-	files = new cq();
+	files = new lq();
 	viewStates = /* @__PURE__ */ new Map();
 	modelListeners = /* @__PURE__ */ new Map();
 	fileNodes = /* @__PURE__ */ new Map();
@@ -41361,12 +41378,12 @@ var fq = class {
 	lastActivityAt = Date.now();
 	constructor(e) {
 		if (this.root = e, this.dslId = Number(e.dataset.dslId), !Number.isInteger(this.dslId) || this.dslId <= 0) throw Error("The Grammar Editor has an invalid DSL identifier.");
-		this.editorHost = uq(e, "[data-grammar-editor]"), this.filesHost = uq(e, "[data-grammar-files]"), this.createButton = e.querySelector("[data-grammar-file-create]"), this.saveButton = e.querySelector("[data-grammar-save]"), this.validateButton = uq(e, "[data-grammar-validate]"), this.restartButton = uq(e, "[data-grammar-server-restart]"), this.status = uq(e, "[data-grammar-status]"), this.validity = uq(e, "[data-grammar-validity]"), this.serverStatus = uq(e, "[data-grammar-server-status]"), this.error = uq(e, "[data-grammar-error]"), this.filename = uq(e, "[data-grammar-filename]"), this.problemsSummary = uq(e, "[data-grammar-problems-summary]"), this.problemsList = uq(e, "[data-grammar-problems]");
+		this.editorHost = dq(e, "[data-grammar-editor]"), this.filesHost = dq(e, "[data-grammar-files]"), this.createButton = e.querySelector("[data-grammar-file-create]"), this.saveButton = e.querySelector("[data-grammar-save]"), this.validateButton = dq(e, "[data-grammar-validate]"), this.restartButton = dq(e, "[data-grammar-server-restart]"), this.status = dq(e, "[data-grammar-status]"), this.validity = dq(e, "[data-grammar-validity]"), this.serverStatus = dq(e, "[data-grammar-server-status]"), this.error = dq(e, "[data-grammar-error]"), this.filename = dq(e, "[data-grammar-filename]"), this.problemsSummary = dq(e, "[data-grammar-problems-summary]"), this.problemsList = dq(e, "[data-grammar-problems]");
 	}
 	async start() {
 		this.setState("Loading…"), this.setValidity("not-validated", "Not validated"), this.saveButton?.addEventListener("click", this.onSaveClick), this.validateButton.addEventListener("click", this.onValidateClick), this.restartButton.addEventListener("click", this.onRestartClick), this.createButton?.addEventListener("click", this.onCreateClick), this.filesHost.addEventListener("click", this.onFilesClick), this.problemsList.addEventListener("click", this.onProblemsClick), this.problemsList.addEventListener("keydown", this.onProblemsKeydown), window.addEventListener("beforeunload", this.onBeforeUnload), window.addEventListener("pagehide", this.onPageHide);
 		try {
-			let e = await lq(`/dsl/${this.dslId}/grammar/load`);
+			let e = await uq(`/dsl/${this.dslId}/grammar/load`);
 			this.canEdit = e.permissions.canEdit, this.suggestedServicesContent = e.suggestedServicesContent;
 			let t = e.files.length ? e.files : this.canEdit ? [{
 				path: e.suggestedPath,
@@ -41383,11 +41400,11 @@ var fq = class {
 		}
 	}
 	mount(e) {
-		dq();
+		fq();
 		for (let t of e) this.addModel(t);
-		let t = e.find((e) => e.isEntry) || e[0];
+		let t = this.files.grouped()[0]?.files[0];
 		this.editor = Rx.create(this.editorHost, {
-			model: t ? this.files.get(t.path)?.model : null,
+			model: t?.model ?? null,
 			automaticLayout: !0,
 			readOnly: !this.canEdit,
 			domReadOnly: !this.canEdit,
@@ -41409,7 +41426,7 @@ var fq = class {
 		}), this.renderFiles(), this.updateDiagnosticMetadata(), this.refreshSaveState(), this.editor.focus();
 	}
 	addModel(e) {
-		let t = Ux.parse(aq(this.dslId, e.path)), n = Rx.createModel(e.content, e.fileType === "services" ? "typescript" : "langium", t), r = n.getAlternativeVersionId(), i = this.files.add({
+		let t = Ux.parse(oq(this.dslId, e.path)), n = Rx.createModel(e.content, e.fileType === "services" ? "typescript" : "langium", t), r = n.getAlternativeVersionId(), i = this.files.add({
 			id: e.id,
 			path: e.path,
 			fileType: e.fileType,
@@ -41428,7 +41445,7 @@ var fq = class {
 		}));
 	}
 	registerOverlayFile(e, t) {
-		let n = new ul(Ux.parse(aq(this.dslId, e)), t);
+		let n = new ul(Ux.parse(oq(this.dslId, e)), t);
 		this.fileNodes.set(e, n), this.fileRegistrations.set(e, this.fileProvider.registerFile(n));
 	}
 	unregisterOverlayFile(e) {
@@ -41445,32 +41462,37 @@ var fq = class {
 	renderFiles() {
 		let e = this.fileErrorCounts();
 		this.root.dataset.grammarFileErrors = JSON.stringify(e);
-		let t = this.files.sorted().map((t) => {
-			let n = document.createElement("div");
-			n.className = "itlingo-grammar-file-row", n.classList.toggle("active", t.path === this.activePath), n.dataset.grammarFilePath = t.path;
-			let r = document.createElement("button");
-			r.type = "button", r.className = "itlingo-grammar-file-select", r.dataset.grammarFileSelect = t.path, r.title = t.path;
-			let i = document.createElement("i");
-			i.className = t.isEntry ? "fa fa-star text-warning" : t.fileType === "services" ? "fa fa-code" : "fa fa-file-code-o", i.setAttribute("aria-hidden", "true");
-			let a = document.createElement("span");
-			if (a.className = "itlingo-grammar-file-label", a.textContent = t.path, r.append(i, a), t.dirty) {
-				let e = document.createElement("span");
-				e.className = "itlingo-grammar-file-dirty", e.title = "Unsaved changes", e.textContent = "●", r.append(e);
-			}
-			let o = e[t.path] || 0;
-			if (o) {
-				let e = document.createElement("span");
-				e.className = "badge rounded-pill bg-danger", e.dataset.grammarFileErrorCount = String(o), e.textContent = String(o), r.append(e);
-			}
-			if (n.append(r), this.canEdit && t.id) {
-				let e = document.createElement("div");
-				e.className = "itlingo-grammar-file-actions", t.isEntry || e.append(this.fileAction("star", "Set as entry file", "set-entry", t.path)), e.append(this.fileAction("pencil", "Rename file", "rename", t.path), this.fileAction("trash", "Delete file", "delete", t.path)), n.append(e);
-			}
-			return n;
-		});
-		this.filesHost.replaceChildren(...t), this.filesHost.classList.toggle("itlingo-grammar-files-empty", t.length === 0), t.length || (this.filesHost.textContent = this.canEdit ? "No grammar or services files. Create one to begin." : "This DSL has no grammar or services files.");
-		let n = this.files.get(this.activePath);
-		this.filename.textContent = n?.path || "No workspace file selected", this.root.dataset.grammarActiveFile = n?.path || "";
+		let t = [], n = 0;
+		for (let r of this.files.grouped()) {
+			let i = document.createElement("div");
+			i.className = "itlingo-grammar-file-group", i.dataset.grammarFileGroup = r.fileType, i.textContent = r.label, t.push(i), n += r.files.length, t.push(...r.files.map((t) => this.fileRow(t, e)));
+		}
+		this.filesHost.replaceChildren(...t), this.filesHost.classList.toggle("itlingo-grammar-files-empty", n === 0), n || (this.filesHost.textContent = this.canEdit ? "No grammar or services files. Create one to begin." : "This DSL has no grammar or services files.");
+		let r = this.files.get(this.activePath);
+		this.filename.textContent = r?.path || "No workspace file selected", this.root.dataset.grammarActiveFile = r?.path || "";
+	}
+	fileRow(e, t) {
+		let n = document.createElement("div");
+		n.className = "itlingo-grammar-file-row", n.classList.toggle("active", e.path === this.activePath), n.dataset.grammarFilePath = e.path;
+		let r = document.createElement("button");
+		r.type = "button", r.className = "itlingo-grammar-file-select", r.dataset.grammarFileSelect = e.path, r.title = e.path;
+		let i = document.createElement("i");
+		i.className = e.isEntry ? "fa fa-star text-warning" : e.fileType === "services" ? "fa fa-code" : "fa fa-file-code-o", i.setAttribute("aria-hidden", "true");
+		let a = document.createElement("span");
+		if (a.className = "itlingo-grammar-file-label", a.textContent = e.path, r.append(i, a), e.dirty) {
+			let e = document.createElement("span");
+			e.className = "itlingo-grammar-file-dirty", e.title = "Unsaved changes", e.textContent = "●", r.append(e);
+		}
+		let o = t[e.path] || 0;
+		if (o) {
+			let e = document.createElement("span");
+			e.className = "badge rounded-pill bg-danger", e.dataset.grammarFileErrorCount = String(o), e.textContent = String(o), r.append(e);
+		}
+		if (n.append(r), this.canEdit && e.id) {
+			let t = document.createElement("div");
+			t.className = "itlingo-grammar-file-actions", e.isEntry || t.append(this.fileAction("star", "Set as entry file", "set-entry", e.path)), t.append(this.fileAction("pencil", "Rename file", "rename", e.path), this.fileAction("trash", "Delete file", "delete", e.path)), n.append(t);
+		}
+		return n;
 	}
 	fileAction(e, t, n, r) {
 		let i = document.createElement("button");
@@ -41499,9 +41521,9 @@ var fq = class {
 	};
 	async createFile(e) {
 		try {
-			let t = sq(e), n = oq(t), r = this.files.sorted().some((e) => e.fileType === "services"), i = n === "services" && !r ? this.suggestedServicesContent : "";
+			let t = cq(e), n = sq(t), r = this.files.sorted().some((e) => e.fileType === "services"), i = n === "services" && !r ? this.suggestedServicesContent : "";
 			this.hideError();
-			let a = await lq(`/dsl/${this.dslId}/grammar/file/create`, {
+			let a = await uq(`/dsl/${this.dslId}/grammar/file/create`, {
 				path: t,
 				content: i,
 				file_type: n
@@ -41516,11 +41538,11 @@ var fq = class {
 		if (!t?.id) return;
 		let n = t.fileType === "services" ? ".ts" : ".langium", r = window.prompt(`New relative ${n} path:`, e);
 		if (r !== null) try {
-			let n = sq(r);
-			if (oq(n) !== t.fileType) throw Error("Renaming cannot change a file between grammar and services.");
+			let n = cq(r);
+			if (sq(n) !== t.fileType) throw Error("Renaming cannot change a file between grammar and services.");
 			if (n === e) return;
 			this.hideError();
-			let i = await lq(`/dsl/${this.dslId}/grammar/file/rename`, {
+			let i = await uq(`/dsl/${this.dslId}/grammar/file/rename`, {
 				file_id: t.id,
 				path: n,
 				file_type: t.fileType
@@ -41528,7 +41550,7 @@ var fq = class {
 			this.setServicesCompilation(i.servicesCompilation);
 			let a = t.model.getValue(), o = this.activePath === e;
 			o && this.editor && this.viewStates.set(e, this.editor.saveViewState()), this.registerOverlayFile(n, a);
-			let s = Rx.createModel(a, t.fileType === "services" ? "typescript" : "langium", Ux.parse(aq(this.dslId, n))), c = this.files.rename(e, n, s);
+			let s = Rx.createModel(a, t.fileType === "services" ? "typescript" : "langium", Ux.parse(oq(this.dslId, n))), c = this.files.rename(e, n, s);
 			c.id = i.id, c.isEntry = i.isEntry, this.modelListeners.get(e)?.dispose(), this.modelListeners.delete(e), this.attachModelListener(c);
 			let l = this.viewStates.get(e) || null;
 			this.viewStates.delete(e), this.viewStates.set(n, l), o && this.editor && (this.activePath = n, this.editor.setModel(s), this.editor.restoreViewState(l)), t.model.dispose(), this.unregisterOverlayFile(e), this.renderFiles(), this.updateDiagnosticMetadata(), this.refreshSaveState();
@@ -41540,14 +41562,14 @@ var fq = class {
 		let t = this.files.get(e);
 		if (!(!t?.id || !window.confirm(`Delete ${e}?`))) try {
 			this.hideError();
-			let n = await lq(`/dsl/${this.dslId}/grammar/file/delete`, {
+			let n = await uq(`/dsl/${this.dslId}/grammar/file/delete`, {
 				file_id: t.id,
 				file_type: t.fileType
 			});
 			this.setServicesCompilation(n.servicesCompilation);
 			let r = this.activePath === e;
 			if (this.modelListeners.get(e)?.dispose(), this.modelListeners.delete(e), this.files.delete(e), this.viewStates.delete(e), this.unregisterOverlayFile(e), r) {
-				let e = this.files.sorted()[0];
+				let e = this.files.grouped()[0]?.files[0];
 				this.activePath = e?.path || "", this.editor?.setModel(e?.model || null);
 			}
 			t.model.dispose(), this.renderFiles(), this.updateDiagnosticMetadata(), this.refreshSaveState();
@@ -41559,7 +41581,7 @@ var fq = class {
 		let t = this.files.get(e);
 		if (t?.id) try {
 			this.hideError();
-			let e = await lq(`/dsl/${this.dslId}/grammar/file/set-entry`, {
+			let e = await uq(`/dsl/${this.dslId}/grammar/file/set-entry`, {
 				file_id: t.id,
 				file_type: t.fileType
 			});
@@ -41706,7 +41728,7 @@ var fq = class {
 			for (let [t, n] of e.entries()) {
 				let r = n.model.getAlternativeVersionId();
 				this.setState(`Saving ${t + 1}/${e.length}…`);
-				let i = await lq(`/dsl/${this.dslId}/grammar/save`, {
+				let i = await uq(`/dsl/${this.dslId}/grammar/save`, {
 					file_id: n.id || !1,
 					path: n.path,
 					content: n.model.getValue(),
@@ -41755,9 +41777,9 @@ var fq = class {
 			this.overlayRegistration?.dispose(), this.fileProvider.dispose();
 		}
 	}
-}, pq;
-function mq(e) {
-	return pq = new fq(e), pq;
+}, mq;
+function hq(e) {
+	return mq = new pq(e), mq;
 }
 //#endregion
-export { mq as mountGrammarEditor };
+export { hq as mountGrammarEditor };

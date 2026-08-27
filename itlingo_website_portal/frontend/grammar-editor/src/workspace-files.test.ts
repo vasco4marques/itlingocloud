@@ -86,6 +86,36 @@ describe('WorkspaceFileRegistry', () => {
         expect(registry.hasDirty()).toBe(false);
     });
 
+    it('groups files by type with entry files first and omits empty groups', () => {
+        const registry = new WorkspaceFileRegistry<ModelStub>();
+        for (const [path, fileType, isEntry] of [
+            ['b.langium', 'grammar', false],
+            ['a.langium', 'grammar', false],
+            ['z.langium', 'grammar', true],
+            ['svc.ts', 'services', true],
+            ['a.ts', 'services', false],
+        ] as const) {
+            registry.add({
+                path, fileType, isEntry, model: new ModelStub(), savedVersionId: 1, dirty: false,
+            });
+        }
+
+        expect(registry.grouped().map(({label, files}) => ({
+            label,
+            paths: files.map((file) => file.path),
+        }))).toEqual([
+            {label: 'Grammar', paths: ['z.langium', 'a.langium', 'b.langium']},
+            {label: 'Extensions', paths: ['svc.ts', 'a.ts']},
+        ]);
+
+        const grammarOnly = new WorkspaceFileRegistry<ModelStub>();
+        grammarOnly.add({
+            path: 'only.langium', fileType: 'grammar', isEntry: true,
+            model: new ModelStub(), savedVersionId: 1, dirty: false,
+        });
+        expect(grammarOnly.grouped()).toHaveLength(1);
+    });
+
     it('renames a file while preserving its identity and dirty state', () => {
         const registry = new WorkspaceFileRegistry<ModelStub>();
         const oldModel = new ModelStub();

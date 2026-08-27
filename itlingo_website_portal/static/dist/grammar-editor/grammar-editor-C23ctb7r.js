@@ -37,7 +37,7 @@ function s() {
 	}
 	return e;
 }
-e && (window.addEventListener("error", o, { capture: !0 }), window.addEventListener("unhandledrejection", o, { capture: !0 }), s() ? import("./chunks/main-DFD7papu.js").then((n) => (t = n.mountGrammarEditor(e), t?.start())).catch((e) => {
+e && (window.addEventListener("error", o, { capture: !0 }), window.addEventListener("unhandledrejection", o, { capture: !0 }), s() ? import("./chunks/main-BigEui_t.js").then((n) => (t = n.mountGrammarEditor(e), t?.start())).catch((e) => {
 	r(e, "Could not start the Grammar Editor.");
 }) : r(/* @__PURE__ */ Error("This browser cannot run module workers. Please use a current version of Firefox, Chrome, Edge, or Safari."), "This browser is not supported by the Grammar Editor.", "unsupported-browser"));
 //#endregion

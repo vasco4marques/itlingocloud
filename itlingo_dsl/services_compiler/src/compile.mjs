@@ -8,7 +8,23 @@ import path from 'node:path';
 import {mkdtemp, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {fileURLToPath, pathToFileURL} from 'node:url';
+import {builtinModules} from 'node:module';
 import {build, version as esbuildVersion} from 'esbuild';
+
+const NODE_BUILTIN = new RegExp(
+    `^(?:node:|(?:${builtinModules.filter((name) => !name.startsWith('node:')).join('|')})$)`,
+);
+// ponytail: static specifiers only; a runtime-computed import(v) or process globals still reach disk. Sandbox the artifact if that matters.
+const SERVICES_FORBIDDEN_IMPORT = {
+    name: 'services-forbidden-import',
+    setup(build) {
+        build.onResolve({filter: NODE_BUILTIN}, (args) => ({
+            errors: [{
+                text: `Services modules cannot import Node built-in modules ("${args.path}"). Disk, process and network access would desynchronise the cloud and editor corpora; use only the DSL AST and the allowed packages: langium, vscode-languageserver-types, compromise.`,
+            }],
+        }));
+    },
+};
 
 const LANGIUM_VERSION = '4.3.1';
 const BUNDLE_VERSION = '1.1.0';
@@ -60,7 +76,7 @@ function normalizeDiagnostic(message, severity, workspacePath) {
         severity,
         message: message.text || String(message),
         ...diagnosticLocation(message.location, workspacePath),
-        code: message.id || 'esbuild',
+        code: message.id || message.pluginName || 'esbuild',
     };
 }
 
@@ -159,6 +175,7 @@ async function main() {
             format: 'esm',
             target: 'node22',
             external: EXTERNAL_PACKAGES,
+            plugins: [SERVICES_FORBIDDEN_IMPORT],
             write: false,
             logLevel: 'silent',
             charset: 'utf8',

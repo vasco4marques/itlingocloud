@@ -581,7 +581,7 @@
                     </div>
                 </div>
             </div>
-            <div class="card itlingo-portal-filter-card shadow-sm border-0 rounded-3 mb-4">
+            <div t-if="can_see_all_members" class="card itlingo-portal-filter-card shadow-sm border-0 rounded-3 mb-4">
                 <div class="card-body">
                     <p class="text-muted small text-uppercase fw-semibold mb-3">Member filters</p>
                     <form method="get" t-att-action="users_filter_url">
@@ -718,7 +718,9 @@
                     </div>
                 </div>
             </div>
-            <t t-call="itlingo_website_portal.portal_list_pager"/>
+            <t t-if="can_see_all_members">
+                <t t-call="itlingo_website_portal.portal_list_pager"/>
+            </t>
         </t>
     </template>
 
