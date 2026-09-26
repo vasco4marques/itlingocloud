@@ -818,7 +818,7 @@
             <t t-call="itlingo_website_portal.portal_documents_list">
                 <t t-set="doc_link_base" t-value="ws_hub_prefix + '/documents'"/>
             </t>
-            <t t-if="project.organization_id">
+            <t t-if="project.organization_id and not workspace_hub_public">
                 <div class="card border-0 shadow-sm rounded-3 mt-4">
                     <div class="card-header bg-white border-0 p-3">
                         <h5 class="fw-semibold mb-0">

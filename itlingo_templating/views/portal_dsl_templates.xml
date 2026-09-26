@@ -7,7 +7,7 @@
     <template id="portal_dsl_edit_templating_warning"
               inherit_id="itlingo_website_portal.portal_dsl_edit"
               name="DSL Edit Templating Warning">
-        <xpath expr="//p[normalize-space()='Definition files']" position="after">
+        <xpath expr="//div[p[normalize-space()='Definition files']]" position="after">
             <div class="alert alert-info small mb-3" role="status">
                 <p class="mb-2">
                     Published, self-contained grammars are available to document

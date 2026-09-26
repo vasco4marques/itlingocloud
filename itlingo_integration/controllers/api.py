@@ -339,6 +339,10 @@ class ITLingoIntegrationAPI(http.Controller):
             'name': doc.file_name,
             'type': self._file_extension(doc.file_name)
             or (doc.document_type_id.name or ''),
+            # Display title and origin scope, so ITOI can show the cloud
+            # document name separately from the underlying binary filename.
+            'title': doc.name,
+            'scope': 'workspace' if doc.project_id else 'organization',
         } for doc in documents]
 
         _logger.info(

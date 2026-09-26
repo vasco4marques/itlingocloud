@@ -154,3 +154,40 @@ test('flattened imported package retains typo diagnostics', () => {
         ),
     ));
 });
+
+test('ambiguity warnings stay on stderr', () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'itlingo-parser-ambiguity-test-'));
+    const grammarPath = path.join(workspace, 'ambiguous.langium');
+    const sourcePath = path.join(workspace, 'source.ambiguous');
+    writeFileSync(grammarPath, `grammar Ambiguous
+
+entry Model:
+    elements+=(Foo | Bar)*;
+
+Foo:
+    'item' value=ID;
+
+Bar:
+    'item' value=ID;
+
+terminal ID: /[a-zA-Z_][a-zA-Z0-9_]*/;
+hidden terminal WS: /\\s+/;
+`, 'utf8');
+    writeFileSync(sourcePath, 'item value', 'utf8');
+    try {
+        const proc = spawnSync(process.execPath, [
+            parserPath,
+            grammarPath,
+            sourcePath,
+            'Ambiguous specification',
+            'all',
+        ], { encoding: 'utf8' });
+
+        assert.equal(proc.status, 0, proc.stderr);
+        const result = JSON.parse(proc.stdout);
+        assert.equal(result.success, true);
+        assert.match(proc.stderr, /Ambiguous Alternatives Detected/);
+    } finally {
+        rmSync(workspace, { recursive: true, force: true });
+    }
+});

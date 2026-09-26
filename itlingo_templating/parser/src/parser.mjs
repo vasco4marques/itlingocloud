@@ -19,12 +19,21 @@ import {
   mergeTypesAndInterfaces,
 } from 'langium/grammar';
 
-function loadGrammar(grammarPath, seen = new Set()) {
+// Mirrors itlingo_dsl/services/grammar_flattener.py flatten_grammar: a file
+// already inlined is skipped, and only a file still on the recursion stack is a
+// genuine cycle. One shared `seen` set conflated the two, so a diamond — the ten
+// files of languium-dsls/current/RSL-2.9/grammar that each import './Terminals' —
+// was rejected as circular and the grammar never loaded.
+function loadGrammar(grammarPath, done = new Set(), inProgress = []) {
   const absolutePath = resolve(grammarPath);
-  if (seen.has(absolutePath)) {
-    throw new Error(`Circular grammar import: ${absolutePath}`);
+  if (done.has(absolutePath)) {
+    return '';
   }
-  seen.add(absolutePath);
+  if (inProgress.includes(absolutePath)) {
+    const cycle = [...inProgress.slice(inProgress.indexOf(absolutePath)), absolutePath];
+    throw new Error(`Circular grammar import: ${cycle.join(' -> ')}`);
+  }
+  inProgress.push(absolutePath);
 
   const baseDir = dirname(absolutePath);
   const grammar = readFileSync(absolutePath, 'utf-8');
@@ -35,10 +44,12 @@ function loadGrammar(grammarPath, seen = new Set()) {
       const fileName = importedPath.endsWith('.langium')
         ? importedPath
         : `${importedPath}.langium`;
-      imports.push(loadGrammar(resolve(baseDir, fileName), seen));
+      imports.push(loadGrammar(resolve(baseDir, fileName), done, inProgress));
       return '';
     },
   );
+  inProgress.pop();
+  done.add(absolutePath);
   return [grammarWithoutImports, ...imports].join('\n');
 }
 
@@ -158,6 +169,16 @@ function collectShape(node, shape = { types: new Set(), namedTypes: new Set() })
   return shape;
 }
 
+async function withStdoutRedirect(callback) {
+  const stdoutWrite = process.stdout.write;
+  process.stdout.write = (...args) => process.stderr.write(...args);
+  try {
+    return await callback();
+  } finally {
+    process.stdout.write = stdoutWrite;
+  }
+}
+
 function emit(result) {
   process.stdout.write(JSON.stringify(result));
 }
@@ -217,74 +238,81 @@ async function main() {
     return;
   }
 
+  let result;
+  let exitCode = 0;
   try {
-    const parsedGrammar = await parseGrammar(grammar);
-    const module = servicesModulePath
-      ? await loadServicesModule(servicesModulePath)
-      : undefined;
-    const services = await createServicesForGrammar({
-      grammar: parsedGrammar.grammarNode,
-      grammarServices: parsedGrammar.grammarServices,
-      module,
-    });
-    repairNestedUnionReflection(parsedGrammar, services.shared.AstReflection);
-    const fileExtension = String(services.LanguageMetaData?.fileExtensions?.[0] || 'dsl').replace(/^\./, '');
-    const factory = services.shared.workspace.LangiumDocumentFactory;
-    const document = factory.fromString(dslText, URI.parse(`memory:///input.${fileExtension}`));
+    result = await withStdoutRedirect(async () => {
+      const parsedGrammar = await parseGrammar(grammar);
+      const module = servicesModulePath
+        ? await loadServicesModule(servicesModulePath)
+        : undefined;
+      const services = await createServicesForGrammar({
+        grammar: parsedGrammar.grammarNode,
+        grammarServices: parsedGrammar.grammarServices,
+        module,
+      });
+      repairNestedUnionReflection(parsedGrammar, services.shared.AstReflection);
+      const fileExtension = String(services.LanguageMetaData?.fileExtensions?.[0] || 'dsl').replace(/^\./, '');
+      const factory = services.shared.workspace.LangiumDocumentFactory;
+      const document = factory.fromString(dslText, URI.parse(`memory:///input.${fileExtension}`));
 
-    const validateSemantics = validationMode !== 'syntax';
-    await services.shared.workspace.DocumentBuilder.build([document], { validation: validateSemantics });
+      const validateSemantics = validationMode !== 'syntax';
+      await services.shared.workspace.DocumentBuilder.build([document], { validation: validateSemantics });
 
-    const diagnostics = validateSemantics ? (document.diagnostics || []).map((d) => ({
-      severity: d.severity,
-      message: d.message,
-      line: d.range?.start?.line ?? null,
-      column: d.range?.start?.character ?? null,
-    })) : [];
+      const diagnostics = validateSemantics ? (document.diagnostics || []).map((d) => ({
+        severity: d.severity,
+        message: d.message,
+        line: d.range?.start?.line ?? null,
+        column: d.range?.start?.character ?? null,
+      })) : [];
 
-    // severity 1 == Error in the LSP diagnostic scale.
-    const parserErrors = (document.parseResult?.parserErrors || []).map((e) => ({
-      severity: 1,
-      message: e.message,
-      line: e.token?.startLine ?? null,
-      column: e.token?.startColumn ?? null,
-    }));
-    const lexerErrors = (document.parseResult?.lexerErrors || []).map((e) => ({
-      severity: 1,
-      message: e.message,
-      line: e.line ?? null,
-      column: e.column ?? null,
-    }));
+      // severity 1 == Error in the LSP diagnostic scale.
+      const parserErrors = (document.parseResult?.parserErrors || []).map((e) => ({
+        severity: 1,
+        message: e.message,
+        line: e.token?.startLine ?? null,
+        column: e.token?.startColumn ?? null,
+      }));
+      const lexerErrors = (document.parseResult?.lexerErrors || []).map((e) => ({
+        severity: 1,
+        message: e.message,
+        line: e.line ?? null,
+        column: e.column ?? null,
+      }));
 
-    const allDiagnostics = [...parserErrors, ...lexerErrors, ...diagnostics];
-    const hasError = parserErrors.length > 0 || lexerErrors.length > 0
-      || allDiagnostics.some((d) => d.severity === 1);
+      const allDiagnostics = [...parserErrors, ...lexerErrors, ...diagnostics];
+      const hasError = parserErrors.length > 0 || lexerErrors.length > 0
+        || allDiagnostics.some((d) => d.severity === 1);
 
-    if (hasError) {
-      emit({ success: false, error: `${label} has errors`, diagnostics: allDiagnostics });
-      process.exit(1);
-      return;
-    }
+      if (hasError) {
+        exitCode = 1;
+        return { success: false, error: `${label} has errors`, diagnostics: allDiagnostics };
+      }
 
-    const ast = serializeAstNode(document.parseResult.value);
-    const shape = collectShape(ast);
-    emit({
-      success: true,
-      ast,
-      diagnostics: allDiagnostics,
-      ast_summary: {
-        node_count: countNodes(ast),
-        root_type: String(document.parseResult.value?.$type || 'Model'),
-      },
-      grammar_shape: {
-        entry_type: String(document.parseResult.value?.$type || 'Model'),
-        observed_types: [...shape.types].sort(),
-        named_types: [...shape.namedTypes].sort(),
-      },
+      const ast = serializeAstNode(document.parseResult.value);
+      const shape = collectShape(ast);
+      return {
+        success: true,
+        ast,
+        diagnostics: allDiagnostics,
+        ast_summary: {
+          node_count: countNodes(ast),
+          root_type: String(document.parseResult.value?.$type || 'Model'),
+        },
+        grammar_shape: {
+          entry_type: String(document.parseResult.value?.$type || 'Model'),
+          observed_types: [...shape.types].sort(),
+          named_types: [...shape.namedTypes].sort(),
+        },
+      };
     });
   } catch (err) {
-    emit({ success: false, error: String(err?.stack || err), diagnostics: [] });
-    process.exit(1);
+    result = { success: false, error: String(err?.stack || err), diagnostics: [] };
+    exitCode = 1;
+  }
+  emit(result);
+  if (exitCode) {
+    process.exit(exitCode);
   }
 }
 

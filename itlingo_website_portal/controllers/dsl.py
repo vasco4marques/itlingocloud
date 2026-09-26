@@ -1,4 +1,7 @@
 import base64
+import io
+import posixpath
+import zipfile
 
 from odoo import _, http
 from odoo.exceptions import AccessError, MissingError, UserError, ValidationError
@@ -308,6 +311,7 @@ class ITLingoDslPortal(CustomerPortal):
             'suggested_version': dsl._suggest_next_version(),
             'publish_error': request.session.pop('dsl_publish_error', None),
             'validate_error': request.session.pop('dsl_validate_error', None),
+            'upload_error': request.session.pop('dsl_upload_error', None),
         })
         if request.httprequest.method == 'POST':
             vals = self._dsl_form_values(post)
@@ -393,17 +397,20 @@ class ITLingoDslPortal(CustomerPortal):
             return request.redirect(f'/dsl/{dsl.id}?error=bad_type')
         if file_type in ('grammar', 'services'):
             self._require_structural_file_edit(dsl)
-        upload = request.httprequest.files.get('file')
-        if not upload or not upload.filename:
+        uploads = [u for u in request.httprequest.files.getlist('file')
+                   if u and u.filename]
+        if not uploads:
             return request.redirect(f'/dsl/{dsl.id}?error=no_file')
+        vals_list = [{
+            'dsl_id': dsl.id,
+            'file_type': file_type,
+            'file': base64.b64encode(upload.read()),
+            'file_name': upload.filename,
+        } for upload in uploads]
         try:
-            request.env['itlingo.dsl.file'].sudo().create({
-                'dsl_id': dsl.id,
-                'file_type': file_type,
-                'file': base64.b64encode(upload.read()),
-                'file_name': upload.filename,
-            })
-        except (UserError, ValidationError):
+            request.env['itlingo.dsl.file'].sudo().create(vals_list)
+        except (UserError, ValidationError) as err:
+            request.session['dsl_upload_error'] = str(err)
             return request.redirect(f'/dsl/{dsl.id}?error=upload_failed')
         return request.redirect(f'/dsl/{dsl.id}?message=file_added')
 
@@ -443,6 +450,54 @@ class ITLingoDslPortal(CustomerPortal):
             headers=[
                 ('Content-Type', 'application/octet-stream'),
                 ('Content-Disposition', content_disposition(line.file_name or 'file')),
+            ],
+        )
+
+    @route('/dsl/<int:dsl_id>/download', type='http', auth='user',
+           website=True, methods=['GET'])
+    def portal_dsl_download(self, dsl_id, **kw):
+        dsl = self._dsl_or_404(dsl_id)
+        self._require_dsl_files(dsl)
+        archive_buffer = io.BytesIO()
+        with zipfile.ZipFile(
+                archive_buffer, 'w', zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for file_type in DSL_FILE_TYPES:
+                archive.mkdir(f'{file_type}/')
+                used_names = set()
+                for file in dsl.file_ids.filtered(
+                        lambda f: f.file_type == file_type and f.is_enabled,
+                ):
+                    file_name = posixpath.basename(
+                        (file.file_name or 'file').replace('\\', '/'),
+                    ) or 'file'
+                    stem, extension = posixpath.splitext(file_name)
+                    archive_name = file_name
+                    suffix = 1
+                    while archive_name in used_names:
+                        archive_name = f'{stem}-{suffix}{extension}'
+                        suffix += 1
+                    used_names.add(archive_name)
+                    archive.writestr(
+                        f'{file_type}/{archive_name}',
+                        base64.b64decode(file.file or b''),
+                    )
+        archive_data = archive_buffer.getvalue()
+        archive_stem = ''.join(
+            char if char.isascii() and (char.isalnum() or char in '._-')
+            else '_'
+            for char in f'{dsl.acronym or ""}-{dsl.version or ""}'
+        )
+        archive_filename = (
+            f'{archive_stem}.zip' if (dsl.acronym or dsl.version)
+            else f'dsl-{dsl.id}.zip'
+        )
+        return request.make_response(
+            archive_data,
+            headers=[
+                ('Content-Type', 'application/zip'),
+                ('Content-Disposition', content_disposition(archive_filename)),
+                ('Content-Length', str(len(archive_data))),
             ],
         )
 
