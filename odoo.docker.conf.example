@@ -1,0 +1,11 @@
+; Copy to /opt/odoo/odoo.docker.conf on the server (mounted read-only into the
+; container at /etc/odoo/odoo.conf). DB credentials come from the compose
+; environment (.env), not from this file.
+[options]
+addons_path = /mnt/extra-addons
+data_dir = /var/lib/odoo
+admin_passwd = changeme
+proxy_mode = True
+; container uses host networking; only nginx (127.0.0.1) should reach odoo
+http_interface = 127.0.0.1
+email_from = no-reply@itlingo.pt

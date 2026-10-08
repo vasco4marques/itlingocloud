@@ -1,0 +1,30 @@
+# Ops Makefile for the droplet — installed as /opt/odoo/Makefile.
+# Drives the docker-based Odoo deployment (post-cutover). The image tag comes
+# from ODOO_TAG in /opt/odoo/.env; deploy.sh on the dev machine bumps it.
+CUSTOM_MODULES = itlingo_organizations,itlingo_workspace_access,itlingo_documents,itlingo_notifications,itlingo_integration,itlingo_website_portal,itlingo_dsl,itlingo_chatbot_integration,itlingo_templating
+
+.PHONY: run stop pull upgrade_custom upgrade logs ps
+
+run:
+	# --renew-anon-volumes: the image declares VOLUME /mnt/extra-addons, and
+	# compose reuses the anonymous volume on recreate — without this flag the
+	# container keeps serving addons code from a previous image.
+	docker compose up -d --renew-anon-volumes
+
+stop:
+	docker compose stop odoo
+
+pull:
+	docker compose pull
+
+upgrade_custom:
+	docker compose stop odoo
+	docker compose run --rm odoo -d itlingo_dev -u $(CUSTOM_MODULES) --stop-after-init
+
+upgrade: upgrade_custom run
+
+logs:
+	docker logs -f itlingo-odoo
+
+ps:
+	docker compose ps

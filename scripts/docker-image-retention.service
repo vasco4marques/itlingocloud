@@ -1,0 +1,13 @@
+[Unit]
+Description=Retain recent Docker images and prune stale build cache
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+Environment=KEEP_PER_REPOSITORY=2
+Environment=BUILDER_CACHE_UNTIL=168h
+ExecStart=/usr/bin/flock -n /run/docker-image-retention.lock /usr/local/sbin/docker-image-retention
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
