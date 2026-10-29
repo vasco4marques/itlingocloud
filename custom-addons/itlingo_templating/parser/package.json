@@ -1,0 +1,27 @@
+{
+  "name": "itlingo-dsl-parser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runtime DSL grammar and source to JSON AST CLI.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/parser.mjs --bundle --platform=node --format=esm --external:langium --outfile=dist/parser.mjs",
+    "test": "npm run build && node --test test/parser.test.mjs"
+  },
+  "dependencies": {
+    "langium": "4.3.1",
+    "compromise": "^14.9.0",
+    "de-compromise": "^0.0.10",
+    "es-compromise": "^0.2.9",
+    "fr-compromise": "^0.2.7",
+    "it-compromise": "^0.2.0",
+    "ja-compromise": "^0.0.1",
+    "pt-compromise": "^0.0.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

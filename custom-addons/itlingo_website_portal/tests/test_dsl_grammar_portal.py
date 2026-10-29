@@ -1,0 +1,1557 @@
+from odoo import api
+from types import SimpleNamespace
+import re
+from unittest.mock import patch
+
+from lxml import html
+
+from odoo.tests import HttpCase, JsonRpcException, new_test_user, tagged
+from odoo.exceptions import ValidationError
+from odoo.tests.common import TransactionCase
+from odoo.tools.misc import mute_logger
+
+VALID_GRAMMAR = (
+    "grammar {name}\n"
+    "entry Model: 'model' name=ID;\n"
+    "hidden terminal WS: /\\s+/;\n"
+    "terminal ID: /[_a-zA-Z][\\w_]*/;\n"
+)
+
+
+@tagged('post_install', '-at_install')
+class TestDslGrammarPortal(HttpCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.maintainer = new_test_user(
+            cls.env,
+            login='grammar_maintainer',
+            password='grammar_maintainer',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_member'
+            ),
+        )
+        cls.unrelated = new_test_user(
+            cls.env,
+            login='grammar_unrelated',
+            password='grammar_unrelated',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_member'
+            ),
+        )
+        cls.admin = new_test_user(
+            cls.env,
+            login='grammar_admin',
+            password='grammar_admin',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_admin'
+            ),
+        )
+        cls.draft = cls.env['itlingo.dsl'].create({
+            'name': 'Portal Grammar Draft',
+            'acronym': 'PGD',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, cls.maintainer.ids)],
+        })
+        cls.other_draft = cls.env['itlingo.dsl'].create({
+            'name': 'Other Portal Grammar Draft',
+            'acronym': 'OPGD',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, cls.maintainer.ids)],
+        })
+        cls.active = cls.env['itlingo.dsl'].create({
+            'name': 'Public Portal Grammar',
+            'acronym': 'PPG',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, cls.maintainer.ids)],
+        })
+        cls.grammar = cls.env['itlingo.dsl.file']._create_grammar_text(
+            cls.draft,
+            'PGD.langium',
+            'grammar PGD\n// Olá 🌍\nentry Model: name=ID;\n',
+        )
+        cls.other_grammar = cls.env['itlingo.dsl.file']._create_grammar_text(
+            cls.other_draft,
+            'OPGD.langium',
+            'grammar OPGD\nentry Model: name=ID;\n',
+        )
+        cls.active_grammar = cls.env['itlingo.dsl.file']._create_grammar_text(
+            cls.active,
+            'PPG.langium',
+            "grammar PPG\n"
+            "entry Model: 'model' name=ID;\n"
+            "hidden terminal WS: /\\s+/;\n"
+            "terminal ID: /[_a-zA-Z][\\w_]*/;\n",
+        )
+        # Activation must go through publication (server-side validation).
+        cls.active.action_publish()
+
+    def test_public_catalog_only_contains_active_dsls(self):
+        self.authenticate(None, None)
+        response = self.url_open('/dsl')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Public Portal Grammar', response.text)
+        self.assertNotIn('Portal Grammar Draft', response.text)
+
+        draft_response = self.url_open(
+            f'/dsl/{self.draft.id}', allow_redirects=False,
+        )
+        self.assertEqual(draft_response.status_code, 404)
+
+    def test_editor_assets_are_route_only(self):
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        detail = self.url_open(f'/dsl/{self.draft.id}')
+        editor = self.url_open(f'/dsl/{self.draft.id}/grammar')
+
+        self.assertEqual(editor.status_code, 200)
+        self.assertIn('Back to DSL', editor.text)
+        self.assertIn('Open editor', detail.text)
+
+        document = html.fromstring(editor.content)
+        script_urls = document.xpath(
+            '//script[contains(@src, "/grammar-editor-")]/@src'
+        )
+        style_urls = document.xpath(
+            '//link[contains(@href, "/assets/grammar-editor-")]/@href'
+        )
+        self.assertEqual(len(script_urls), 1)
+        self.assertEqual(len(style_urls), 1)
+        self.assertNotIn('/grammar-editor-', detail.text)
+        self.assertEqual(self.url_open(script_urls[0]).status_code, 200)
+        self.assertEqual(self.url_open(style_urls[0]).status_code, 200)
+
+        breadcrumbs = document.xpath(
+            "//ol[contains(concat(' ', normalize-space(@class), ' '),"
+            " ' o_portal_submenu ')]"
+            "//li[contains(concat(' ', normalize-space(@class), ' '),"
+            " ' breadcrumb-item ')]"
+        )
+        self.assertEqual(
+            [' '.join(item.text_content().split()) for item in breadcrumbs[-3:]],
+            ['DSLs', self.draft.acronym, 'Grammar'],
+        )
+        self.assertEqual(
+            breadcrumbs[-2].xpath('./a/@href'),
+            [f'/dsl/{self.draft.id}'],
+        )
+        self.assertIn('active', breadcrumbs[-1].get('class', '').split())
+
+    def _file_group(self, response, label):
+        """Return the single ``file_groups`` block rendered for ``label``."""
+        document = html.fromstring(response.content)
+        groups = document.xpath(
+            f"//h6[normalize-space()='{label}']"
+            "/ancestor::div[contains(concat(' ', normalize-space(@class), ' '),"
+            " ' mb-4 ')][1]"
+        )
+        self.assertEqual(len(groups), 1, f'Expected one {label} file group.')
+        return groups[0]
+
+    @patch(
+        'odoo.addons.itlingo_dsl.services.services_compiler.compile_services'
+    )
+    def test_dsl_detail_lists_services_files(self, compile_services):
+        compile_services.return_value = {
+            'ok': True,
+            'js': 'export default function() { return {}; }',
+            'diagnostics': [],
+            'compiler_version': 'test',
+        }
+        services = self.env['itlingo.dsl.file']._create_services_text(
+            self.draft,
+            'services.ts',
+            'export default function() { return {}; }\n',
+        )
+
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        response = self.url_open(f'/dsl/{self.draft.id}')
+        services_group = self._file_group(response, 'Services')
+
+        self.assertIn(services.relative_path, services_group.text_content())
+        self.assertIn('Entry', services_group.text_content())
+        self.assertIn(self.grammar.relative_path, response.text)
+        self.assertTrue(
+            services_group.xpath(f".//a[@href='/dsl/{self.draft.id}/grammar']")
+        )
+        self.assertEqual(
+            services_group.xpath(".//input[@name='file_type']/@value"),
+            ['services'],
+        )
+        self.assertEqual(
+            services_group.xpath(".//input[@name='file']/@accept"),
+            ['.ts'],
+        )
+        self.assertFalse(
+            services_group.xpath(
+                f".//form[contains(@action, '/files/{services.id}/toggle')]"
+            )
+        )
+        self.assertFalse(
+            services_group.xpath(
+                f".//form[contains(@action, '/files/{services.id}/delete')]"
+            )
+        )
+
+    @patch(
+        'odoo.addons.itlingo_dsl.services.services_compiler.compile_services'
+    )
+    def test_dsl_detail_shows_services_compile_state(self, compile_services):
+        error_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Services Compile Error',
+            'acronym': 'SCE',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        compile_services.return_value = {
+            'ok': False,
+            'js': '',
+            'diagnostics': [{
+                'severity': 'error',
+                'message': 'Services compiler failure',
+                'path': 'services.ts',
+                'line': 1,
+                'column': 1,
+                'code': 'services-test',
+            }],
+            'compiler_version': 'test',
+        }
+        self.env['itlingo.dsl.file']._create_services_text(
+            error_dsl,
+            'services.ts',
+            'export default function() { return {}; }\n',
+        )
+
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        error_response = self.url_open(f'/dsl/{error_dsl.id}')
+        self.assertIn('Services errors', error_response.text)
+        self.assertIn('Services compilation failed.', error_response.text)
+
+        compile_services.return_value = {
+            'ok': True,
+            'js': 'export default function() { return {}; }',
+            'diagnostics': [],
+            'compiler_version': 'test',
+        }
+        ok_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Services Compile OK',
+            'acronym': 'SCO',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.env['itlingo.dsl.file']._create_services_text(
+            ok_dsl,
+            'services.ts',
+            'export default function() { return {}; }\n',
+        )
+        ok_response = self.url_open(f'/dsl/{ok_dsl.id}')
+        self.assertEqual(
+            len(html.fromstring(ok_response.content).xpath(
+                "//span[contains(@class, 'badge')]"
+                "[normalize-space()='Services compiled']"
+            )),
+            1,
+        )
+
+        no_services_dsl = self.env['itlingo.dsl'].create({
+            'name': 'No Services',
+            'acronym': 'NSV',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        no_services_response = self.url_open(f'/dsl/{no_services_dsl.id}')
+        self.assertNotIn('Services errors', no_services_response.text)
+        self.assertNotIn('Services compiled', no_services_response.text)
+        self.assertNotIn('Services not compiled', no_services_response.text)
+
+    @patch(
+        'odoo.addons.itlingo_dsl.services.services_compiler.compile_services'
+    )
+    def test_services_upload_from_detail_page(self, compile_services):
+        compile_services.return_value = {
+            'ok': True,
+            'js': 'export default function() { return {}; }',
+            'diagnostics': [],
+            'compiler_version': 'test',
+        }
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        form_page = self.url_open(f'/dsl/{self.draft.id}')
+        upload_form = self._file_group(form_page, 'Services').xpath(
+            ".//form[contains(@action, '/files/add')]"
+        )
+        self.assertEqual(len(upload_form), 1)
+        csrf_token = upload_form[0].xpath(".//input[@name='csrf_token']/@value")
+
+        uploaded = self.url_open(
+            f'/dsl/{self.draft.id}/files/add',
+            data={'csrf_token': csrf_token[0], 'file_type': 'services'},
+            files={'file': (
+                'services.ts',
+                b'export default function() { return {}; }\n',
+                'text/plain',
+            )},
+        )
+
+        self.assertEqual(uploaded.status_code, 200)
+        created = self.draft.file_ids.filtered(
+            lambda f: f.file_type == 'services'
+        )
+        self.assertEqual(created.relative_path, 'services.ts')
+        self.assertTrue(created.is_entry)
+        self.assertIn(
+            'services.ts',
+            self._file_group(uploaded, 'Services').text_content(),
+        )
+
+    def test_language_service_diagnostics_and_restart_in_browser(self):
+        browser_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Grammar Browser Smoke',
+            'acronym': 'GBS',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.env['itlingo.dsl.file']._create_grammar_text(
+            browser_dsl,
+            'GBS.langium',
+            'grammar GBS\n'
+            'entry Model: value=MissingRule;\n'
+            'terminal WS: /\\s+/\n',
+        )
+        code = """
+        (async () => {
+            const root = document.querySelector('#itlingo-grammar-editor');
+            const waitFor = async (predicate, message) => {
+                const deadline = Date.now() + 30000;
+                while (!predicate()) {
+                    if (Date.now() > deadline) {
+                        throw new Error(message);
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+            };
+
+            await waitFor(
+                () => root.dataset.grammarServerState === 'ready',
+                'Langium grammar server did not become ready',
+            );
+            await waitFor(
+                () => !root.querySelector('[data-grammar-validate]').disabled,
+                'Validate never became available',
+            );
+            const capabilities = new Set(
+                root.dataset.grammarServerCapabilities.split(','),
+            );
+            for (const capability of ['completion', 'hover', 'definition']) {
+                if (!capabilities.has(capability)) {
+                    throw new Error(`Langium server omitted ${capability} support`);
+                }
+            }
+            await waitFor(
+                () => Number(root.dataset.grammarDiagnosticErrors) > 0,
+                'Invalid grammar did not create error markers',
+            );
+            const messages = JSON.parse(root.dataset.grammarDiagnosticMessages);
+            if (!messages.some((message) => message.includes('MissingRule'))) {
+                throw new Error('Unknown grammar rule diagnostic is missing');
+            }
+            if (!messages.some(
+                (message) => message.toLowerCase().includes('expecting')
+                    && message.includes(';'),
+            )) {
+                throw new Error(
+                    `Missing-semicolon diagnostic is missing: ${messages.join(' | ')}`,
+                );
+            }
+
+            // Problems panel lists every marker with position details.
+            await waitFor(
+                () => root.querySelectorAll('[data-grammar-problem-index]').length
+                    === Number(root.dataset.grammarDiagnostics),
+                'Problems panel did not list every diagnostic',
+            );
+            const summary = root.querySelector('[data-grammar-problems-summary]');
+            if (!/Problems: .*error/.test(summary.textContent)) {
+                throw new Error(`Problems summary lacks error count: ${summary.textContent}`);
+            }
+            const firstProblem = root.querySelector('[data-grammar-problem-index]');
+            if (!/Ln \\d+, Col \\d+/.test(firstProblem.textContent)) {
+                throw new Error('Problem entries do not show line and column');
+            }
+
+            // Selecting a problem focuses the editor on its range.
+            firstProblem.click();
+            await waitFor(
+                () => root.dataset.grammarFocusedProblem === '0'
+                    && root.querySelector('[data-grammar-editor]')
+                        .contains(document.activeElement),
+                'Selecting a problem did not focus the editor range',
+            );
+
+            // Explicit validation reports invalidity for the erroneous source.
+            root.querySelector('[data-grammar-validate]').click();
+            await waitFor(
+                () => root.dataset.grammarValidityState === 'invalid',
+                'Validate did not report the grammar as invalid',
+            );
+
+            // An invalid draft can still be saved and stays visibly invalid.
+            const saveButton = root.querySelector('[data-grammar-save]');
+            if (!saveButton) {
+                throw new Error('Draft grammar editor is missing its Save button');
+            }
+            const statusEl = root.querySelector('[data-grammar-status]');
+            if (statusEl.textContent !== 'Saved') {
+                throw new Error('Loaded grammar should start in the Saved state');
+            }
+            if (root.dataset.grammarValidityState !== 'invalid') {
+                throw new Error('Saved state must not imply validity');
+            }
+
+            const generation = Number(root.dataset.grammarServerGeneration);
+            root.querySelector('[data-grammar-server-restart]').click();
+            if (Number(root.dataset.grammarDiagnostics) !== 0) {
+                throw new Error('Restart did not clear markers from the old client');
+            }
+            await waitFor(
+                () => root.dataset.grammarServerState === 'ready'
+                    && Number(root.dataset.grammarServerGeneration) > generation,
+                'Langium grammar server did not restart cleanly',
+            );
+            await waitFor(
+                () => Number(root.dataset.grammarDiagnosticErrors) > 0,
+                'Diagnostics were not restored after restart',
+            );
+            console.log('test successful');
+        })();
+        """
+        self.browser_js(
+            f'/dsl/{browser_dsl.id}/grammar',
+            code,
+            ready="Boolean(document.querySelector('#itlingo-grammar-editor'))",
+            login='grammar_maintainer',
+            timeout=60,
+        )
+
+    def test_starter_grammar_is_valid_in_browser(self):
+        starter_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Starter Grammar Draft',
+            'acronym': 'SGD',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        code = """
+        (async () => {
+            const root = document.querySelector('#itlingo-grammar-editor');
+            const waitFor = async (predicate, message) => {
+                const deadline = Date.now() + 30000;
+                while (!predicate()) {
+                    if (Date.now() > deadline) {
+                        throw new Error(message);
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+            };
+
+            await waitFor(
+                () => root.dataset.grammarServerState === 'ready',
+                'Langium grammar server did not become ready',
+            );
+            await waitFor(
+                () => !root.querySelector('[data-grammar-validate]').disabled,
+                'Validate never became available',
+            );
+            root.querySelector('[data-grammar-validate]').click();
+            await waitFor(
+                () => root.dataset.grammarValidityState === 'valid',
+                'The starter grammar was not accepted by the Langium service',
+            );
+            if (Number(root.dataset.grammarDiagnosticErrors) !== 0) {
+                throw new Error('The starter grammar produced error markers');
+            }
+            console.log('test successful');
+        })();
+        """
+        self.browser_js(
+            f'/dsl/{starter_dsl.id}/grammar',
+            code,
+            ready="Boolean(document.querySelector('#itlingo-grammar-editor'))",
+            login='grammar_maintainer',
+            timeout=60,
+        )
+
+    @patch(
+        'odoo.addons.itlingo_dsl.services.services_compiler.compile_services'
+    )
+    def test_services_compile_and_typescript_problems_in_browser(
+        self, compile_services,
+    ):
+        browser_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Services Browser Smoke',
+            'acronym': 'SBS',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.env['itlingo.dsl.file']._create_grammar_text(
+            browser_dsl,
+            'SBS.langium',
+            VALID_GRAMMAR.format(name='SBS'),
+        )
+        compile_services.return_value = {
+            'ok': False,
+            'js': '',
+            'diagnostics': [{
+                'severity': 'error',
+                'message': 'Persisted services compiler failure',
+                'path': 'services.ts',
+                'line': 1,
+                'column': 1,
+                'length': 6,
+                'code': 'services-test',
+            }],
+            'compiler_version': 'test',
+        }
+        self.env['itlingo.dsl.file']._create_services_text(
+            browser_dsl,
+            'services.ts',
+            'export default function createDslModule() { return {}; }\n',
+        )
+
+        code = """
+        (async () => {
+            const root = document.querySelector('#itlingo-grammar-editor');
+            const waitFor = async (predicate, message) => {
+                const deadline = Date.now() + 30000;
+                while (!predicate()) {
+                    if (Date.now() > deadline) {
+                        throw new Error(message);
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+            };
+            await waitFor(
+                () => root.dataset.grammarServerState === 'ready',
+                'Langium grammar server did not become ready',
+            );
+            await waitFor(
+                () => JSON.parse(root.dataset.grammarDiagnosticMessages || '[]')
+                    .includes('Persisted services compiler failure'),
+                'Persisted services compilation diagnostics were not shown',
+            );
+            if (root.dataset.servicesCompileResult !== 'error') {
+                throw new Error('Services compilation result was not exposed');
+            }
+
+            root.querySelector('[data-grammar-file-select="services.ts"]').click();
+            const script = document.querySelector('script[src*="/grammar-editor-"]');
+            const editorModule = await import(script.src);
+            editorModule.grammarEditorApp.setFileContent(
+                'services.ts',
+                'export default function () { return { broken: ; }; }',
+            );
+            await waitFor(
+                () => !JSON.parse(root.dataset.grammarDiagnosticMessages || '[]')
+                    .includes('Persisted services compiler failure'),
+                'Editing services did not clear stale compiler diagnostics',
+            );
+            await waitFor(
+                () => (JSON.parse(root.dataset.grammarFileErrors || '{}')[
+                    'services.ts'
+                ] || 0) > 0,
+                'Monaco TypeScript diagnostics were not shown for services.ts',
+            );
+            console.log('test successful');
+        })();
+        """
+        self.browser_js(
+            f'/dsl/{browser_dsl.id}/grammar',
+            code,
+            ready="Boolean(document.querySelector('#itlingo-grammar-editor'))",
+            login='grammar_maintainer',
+            timeout=60,
+        )
+
+    def test_multifile_imports_revalidate_and_survive_restart_in_browser(self):
+        browser_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Grammar Multi-file Browser',
+            'acronym': 'GMB',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.env['itlingo.dsl.file']._create_grammar_text(
+            browser_dsl,
+            'grammar/Main File.langium',
+            "grammar GMB\n"
+            "import '../shared/Terminals'\n"
+            "entry Model: name=ID;\n",
+        )
+        self.env['itlingo.dsl.file']._create_grammar_text(
+            browser_dsl,
+            'shared/Terminals.langium',
+            "hidden terminal WS: /\\s+/;\n"
+            "terminal ID: /[_a-zA-Z][\\w_]*/;\n",
+            is_entry=False,
+        )
+        code = """
+        (async () => {
+            const root = document.querySelector('#itlingo-grammar-editor');
+            const waitFor = async (predicate, message) => {
+                const deadline = Date.now() + 30000;
+                while (!predicate()) {
+                    if (Date.now() > deadline) {
+                        throw new Error(message);
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+            };
+            await waitFor(
+                () => root.dataset.grammarServerState === 'ready',
+                'Langium grammar server did not become ready',
+            );
+            await waitFor(
+                () => root.querySelectorAll('[data-grammar-file-select]').length === 2,
+                'The explorer did not render both grammar files',
+            );
+            await waitFor(
+                () => Number(root.dataset.grammarDiagnostics) === 0,
+                'The valid cross-directory import did not resolve',
+            );
+
+            const terminals = root.querySelector(
+                '[data-grammar-file-select="shared/Terminals.langium"]',
+            );
+            terminals.click();
+            if (root.dataset.grammarActiveFile !== 'shared/Terminals.langium') {
+                throw new Error('Explorer switching did not activate Terminals.langium');
+            }
+
+            const script = document.querySelector('script[src*="/grammar-editor-"]');
+            const editorModule = await import(script.src);
+            editorModule.grammarEditorApp.setFileContent(
+                'shared/Terminals.langium',
+                'hidden terminal WS: /\\s+/;\\nterminal OTHER: /x/;\\n',
+            );
+            await waitFor(
+                () => JSON.parse(root.dataset.grammarFileErrors || '{}')[
+                    'grammar/Main File.langium'
+                ] > 0,
+                'Changing an imported terminal did not revalidate its importer',
+            );
+
+            editorModule.grammarEditorApp.setFileContent(
+                'shared/Terminals.langium',
+                'hidden terminal WS: /\\s+/;\\n'
+                    + 'terminal ID: /[_a-zA-Z][\\w_]*/;\\n',
+            );
+            await waitFor(
+                () => Number(root.dataset.grammarDiagnosticErrors) === 0,
+                'Restoring the imported terminal did not clear dependent errors',
+            );
+
+            const generation = Number(root.dataset.grammarServerGeneration);
+            root.querySelector('[data-grammar-server-restart]').click();
+            await waitFor(
+                () => root.dataset.grammarServerState === 'ready'
+                    && Number(root.dataset.grammarServerGeneration) > generation,
+                'Langium grammar server did not restart',
+            );
+            root.querySelector('[data-grammar-validate]').click();
+            await waitFor(
+                () => root.dataset.grammarValidityState === 'valid',
+                'Imports were not restored from all open models after restart',
+            );
+            console.log('test successful');
+        })();
+        """
+        self.browser_js(
+            f'/dsl/{browser_dsl.id}/grammar',
+            code,
+            ready="Boolean(document.querySelector('#itlingo-grammar-editor'))",
+            login='grammar_maintainer',
+            timeout=90,
+        )
+
+    def test_maintainer_loads_and_saves_same_file(self):
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        workspace = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/load',
+        )
+        self.assertTrue(workspace['permissions']['canEdit'])
+        self.assertEqual(workspace['files'][0]['id'], self.grammar.id)
+        self.assertIn('Olá 🌍', workspace['files'][0]['content'])
+
+        saved = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/save',
+            {
+                'file_id': self.grammar.id,
+                'path': 'PGD.langium',
+                'content': 'grammar PGD\nentry Model: title=STRING;\n',
+            },
+        )
+        self.assertEqual(saved['id'], self.grammar.id)
+        self.assertEqual(
+            self.grammar._read_text_utf8(),
+            'grammar PGD\nentry Model: title=STRING;\n',
+        )
+
+    def test_load_returns_all_grammar_files_sorted_by_path(self):
+        terminals = self.env['itlingo.dsl.file']._create_grammar_text(
+            self.draft,
+            'shared/Terminals.langium',
+            'terminal ID: /[_a-zA-Z][\\w_]*/;\n',
+        )
+        nested = self.env['itlingo.dsl.file']._create_grammar_text(
+            self.draft,
+            'features/Inventory.langium',
+            'grammar Inventory\ninterface Item { name: string }\n',
+        )
+
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        workspace = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/load',
+        )
+
+        self.assertEqual(
+            [item['path'] for item in workspace['files']],
+            ['PGD.langium', 'features/Inventory.langium',
+             'shared/Terminals.langium'],
+        )
+        by_id = {item['id']: item for item in workspace['files']}
+        self.assertTrue(by_id[self.grammar.id]['isEntry'])
+        self.assertFalse(by_id[terminals.id]['isEntry'])
+        self.assertEqual(
+            by_id[nested.id]['content'],
+            'grammar Inventory\ninterface Item { name: string }\n',
+        )
+
+    @patch(
+        'odoo.addons.itlingo_dsl.services.services_compiler.compile_services'
+    )
+    def test_services_typescript_round_trips_with_compile_diagnostics(
+        self, compile_services,
+    ):
+        compile_services.return_value = {
+            'ok': True,
+            'js': 'export default function(){return {}}',
+            'diagnostics': [],
+            'compiler_version': 'test',
+        }
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+
+        workspace = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/load',
+        )
+        self.assertEqual(workspace['suggestedServicesPath'], 'services.ts')
+        self.assertIn('node.$type', workspace['suggestedServicesContent'])
+        self.assertIn('return {}', workspace['suggestedServicesContent'])
+
+        created = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/create',
+            {
+                'path': 'runtime/services.ts',
+                'file_type': 'services',
+                'content': workspace['suggestedServicesContent'],
+            },
+        )
+        self.assertEqual(created['fileType'], 'services')
+        self.assertTrue(created['isEntry'])
+        self.assertEqual(created['servicesCompilation']['result'], 'ok')
+
+        compile_services.return_value = {
+            'ok': False,
+            'js': '',
+            'diagnostics': [{
+                'severity': 'error',
+                'message': 'Expected identifier',
+                'path': 'runtime/services.ts',
+                'line': 3,
+                'column': 7,
+                'length': 2,
+                'code': 'expected-identifier',
+            }],
+            'compiler_version': 'test',
+        }
+        saved = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/save',
+            {
+                'file_id': created['id'],
+                'file_type': 'services',
+                'path': 'runtime/services.ts',
+                'content': 'export default function () { return { broken: ; }; }',
+            },
+        )
+        diagnostics = saved['servicesCompilation']['diagnostics']
+        self.assertEqual(saved['fileType'], 'services')
+        self.assertEqual(saved['servicesCompilation']['result'], 'error')
+        self.assertEqual(diagnostics[0]['path'], 'runtime/services.ts')
+        self.assertEqual(diagnostics[0]['line'], 3)
+
+        loaded = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/load',
+        )
+        by_path = {item['path']: item for item in loaded['files']}
+        self.assertEqual(by_path['PGD.langium']['fileType'], 'grammar')
+        self.assertEqual(by_path['runtime/services.ts']['fileType'], 'services')
+        self.assertEqual(loaded['servicesCompilation']['diagnostics'], diagnostics)
+
+        compile_services.return_value = {
+            'ok': True,
+            'js': 'export default function(){return {}}',
+            'diagnostics': [],
+            'compiler_version': 'test',
+        }
+        supporting = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/create',
+            {
+                'path': 'runtime/helpers.ts',
+                'file_type': 'services',
+                'content': 'export const helper = true;\n',
+            },
+        )
+        self.assertFalse(supporting['isEntry'])
+        renamed = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/rename',
+            {
+                'file_id': supporting['id'],
+                'file_type': 'services',
+                'path': 'shared/helpers.ts',
+            },
+        )
+        self.assertEqual(renamed['fileType'], 'services')
+        entry_result = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/set-entry',
+            {'file_id': supporting['id'], 'file_type': 'services'},
+        )
+        entries = {item['id']: item['isEntry'] for item in entry_result['files']}
+        self.assertFalse(entries[created['id']])
+        self.assertTrue(entries[supporting['id']])
+        self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/delete',
+            {'file_id': created['id'], 'file_type': 'services'},
+        )
+        final_workspace = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/load',
+        )
+        services_files = [
+            item for item in final_workspace['files']
+            if item['fileType'] == 'services'
+        ]
+        self.assertEqual(
+            [(item['path'], item['isEntry']) for item in services_files],
+            [('shared/helpers.ts', True)],
+        )
+
+    def test_save_is_content_only_for_existing_file(self):
+        grammar = self.env['itlingo.dsl.file']._create_grammar_text(
+            self.draft,
+            'shared/Terminals.langium',
+            'terminal ID: /old/;\n',
+        )
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+
+        saved = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/save',
+            {
+                'file_id': grammar.id,
+                'path': 'shared/Terminals.langium',
+                'content': 'terminal ID: /new/;\n',
+            },
+        )
+        self.assertEqual(saved['path'], 'shared/Terminals.langium')
+        self.assertEqual(grammar._read_text_utf8(), 'terminal ID: /new/;\n')
+
+        with self.assertRaises(JsonRpcException), mute_logger('odoo.http'):
+            self.make_jsonrpc_request(
+                f'/dsl/{self.draft.id}/grammar/save',
+                {
+                    'file_id': grammar.id,
+                    'path': 'shared/Renamed.langium',
+                    'content': 'terminal ID: /changed/;\n',
+                },
+            )
+        self.assertEqual(grammar.relative_path, 'shared/Terminals.langium')
+        self.assertEqual(grammar._read_text_utf8(), 'terminal ID: /new/;\n')
+
+    def test_create_rename_delete_and_set_entry(self):
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        created = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/create',
+            {
+                'path': 'shared/Terminals.langium',
+                'content': 'terminal ID: /[_a-zA-Z][\\w_]*/;\n',
+            },
+        )
+        self.assertFalse(created['isEntry'])
+
+        renamed = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/rename',
+            {
+                'file_id': created['id'],
+                'path': 'common/Terminals.langium',
+            },
+        )
+        self.assertEqual(renamed['path'], 'common/Terminals.langium')
+        supporting = self.env['itlingo.dsl.file'].browse(created['id'])
+        self.assertEqual(supporting.file_name, 'Terminals.langium')
+
+        with self.assertRaises(JsonRpcException), mute_logger('odoo.http'):
+            self.make_jsonrpc_request(
+                f'/dsl/{self.draft.id}/grammar/file/delete',
+                {'file_id': self.grammar.id},
+            )
+
+        result = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/set-entry',
+            {'file_id': supporting.id},
+        )
+        flags = {item['id']: item['isEntry'] for item in result['files']}
+        self.assertFalse(flags[self.grammar.id])
+        self.assertTrue(flags[supporting.id])
+        supporting.invalidate_recordset(['is_entry'])
+
+        deleted = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/delete',
+            {'file_id': self.grammar.id},
+        )
+        self.assertTrue(deleted['deleted'])
+        self.assertFalse(self.env['itlingo.dsl.file'].search_count([
+            ('id', '=', self.grammar.id),
+        ]))
+        self.assertTrue(supporting.is_entry)
+
+    def _assert_repository_api_allowed(self, login):
+        self.authenticate(login, login)
+        baseline = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/export',
+        )
+        loaded = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/load',
+        )
+        current = loaded['files'][0]
+        self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/save',
+            {
+                'file_id': current['id'],
+                'path': current['path'],
+                'content': current['content'],
+            },
+        )
+        created = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/create',
+            {'path': 'Auth.langium', 'content': 'grammar Auth\n'},
+        )
+        renamed = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/rename',
+            {'file_id': created['id'], 'path': 'auth/Auth.langium'},
+        )
+        self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/set-entry',
+            {'file_id': renamed['id']},
+        )
+        exported = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/export',
+        )
+        imported = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/import', exported,
+        )
+        non_entry = next(
+            item for item in imported['files'] if not item['isEntry']
+        )
+        self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/file/delete',
+            {'file_id': non_entry['id']},
+        )
+        self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/import', baseline,
+        )
+
+    def test_maintainer_is_authorized_for_every_repository_endpoint(self):
+        self._assert_repository_api_allowed('grammar_maintainer')
+
+    def test_admin_is_authorized_for_every_repository_endpoint(self):
+        self._assert_repository_api_allowed('grammar_admin')
+
+    def test_export_import_round_trip_preserves_workspace(self):
+        self.env['itlingo.dsl.file']._create_grammar_text(
+            self.draft,
+            'shared/Terminals.langium',
+            '// Olá 🌍\nterminal ID: /[_a-zA-Z][\\w_]*/;\n',
+        )
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        exported = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/export',
+        )
+        self.assertNotIn('id', exported['files'][0])
+
+        replacement = {
+            'files': [{
+                'path': 'temporary/Replacement.langium',
+                'content': 'grammar Replacement\nentry Model: value=STRING;\n',
+                'isEntry': True,
+            }],
+        }
+        self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/import', replacement,
+        )
+        restored = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/import', exported,
+        )
+        round_trip = [
+            {
+                key: item[key]
+                for key in ('path', 'content', 'isEntry', 'fileType')
+            }
+            for item in restored['files']
+        ]
+        self.assertEqual(round_trip, exported['files'])
+
+    def test_invalid_import_does_not_replace_workspace(self):
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        before = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/export',
+        )
+        with self.assertRaises(JsonRpcException), mute_logger('odoo.http'):
+            self.make_jsonrpc_request(
+                f'/dsl/{self.draft.id}/grammar/import',
+                {'files': [{
+                    'path': '../outside.langium',
+                    'content': 'grammar Outside\n',
+                    'isEntry': True,
+                }]},
+            )
+        after = self.make_jsonrpc_request(
+            f'/dsl/{self.draft.id}/grammar/export',
+        )
+        self.assertEqual(after, before)
+
+    def test_save_creates_missing_grammar(self):
+        empty_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Empty Grammar Draft',
+            'acronym': 'EGD',
+            'version': 'test-1.0',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        workspace = self.make_jsonrpc_request(
+            f'/dsl/{empty_dsl.id}/grammar/load',
+        )
+        self.assertEqual(workspace['suggestedPath'], 'egd.langium')
+        self.assertIn('grammar EGD', workspace['suggestedContent'])
+        self.assertIn('entry Model:', workspace['suggestedContent'])
+
+        saved = self.make_jsonrpc_request(
+            f'/dsl/{empty_dsl.id}/grammar/save',
+            {
+                'file_id': False,
+                'path': workspace['suggestedPath'],
+                'content': 'grammar EGD\nentry Model: name=ID;\n',
+            },
+        )
+
+        grammar = empty_dsl.file_ids.filtered(
+            lambda item: item.file_type == 'grammar'
+        )
+        self.assertEqual(saved['id'], grammar.id)
+        self.assertEqual(grammar.file_name, 'egd.langium')
+        self.assertEqual(grammar._read_text_utf8(), saved['content'])
+
+    def test_unrelated_and_anonymous_users_cannot_load_source(self):
+        self.authenticate('grammar_unrelated', 'grammar_unrelated')
+        with self.assertRaises(JsonRpcException), mute_logger('odoo.http'):
+            self.make_jsonrpc_request(f'/dsl/{self.draft.id}/grammar/load')
+
+        self.authenticate(None, None)
+        response = self.url_open(
+            f'/dsl/{self.draft.id}/grammar', allow_redirects=False,
+        )
+        self.assertIn(response.status_code, (302, 303))
+
+    def test_cross_dsl_file_save_is_rejected(self):
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        attempts = [
+            ('save', {
+                'file_id': self.other_grammar.id,
+                'path': 'OPGD.langium',
+                'content': 'grammar PGD',
+            }),
+            ('file/rename', {
+                'file_id': self.other_grammar.id,
+                'path': 'Renamed.langium',
+            }),
+            ('file/delete', {'file_id': self.other_grammar.id}),
+            ('file/set-entry', {'file_id': self.other_grammar.id}),
+        ]
+        for suffix, params in attempts:
+            with self.subTest(endpoint=suffix), self.assertRaises(
+                JsonRpcException,
+            ), mute_logger('odoo.http'):
+                self.make_jsonrpc_request(
+                    f'/dsl/{self.draft.id}/grammar/{suffix}', params,
+                )
+
+    def test_traversal_is_rejected_by_path_endpoints(self):
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        attempts = [
+            ('save', {
+                'file_id': self.grammar.id,
+                'path': '../PGD.langium',
+                'content': 'grammar PGD\n',
+            }),
+            ('file/create', {
+                'path': 'nested/../Escape.langium',
+                'content': '',
+            }),
+            ('file/rename', {
+                'file_id': self.grammar.id,
+                'path': '/absolute.langium',
+            }),
+            ('import', {'files': [{
+                'path': 'nested\\Escape.langium',
+                'content': '',
+                'isEntry': True,
+            }]}),
+        ]
+        for suffix, params in attempts:
+            with self.subTest(endpoint=suffix), self.assertRaises(
+                JsonRpcException,
+            ), mute_logger('odoo.http'):
+                self.make_jsonrpc_request(
+                    f'/dsl/{self.draft.id}/grammar/{suffix}', params,
+                )
+
+    def test_unrelated_user_is_rejected_by_every_repository_endpoint(self):
+        self.authenticate('grammar_unrelated', 'grammar_unrelated')
+        attempts = [
+            ('load', {}),
+            ('save', {
+                'file_id': self.grammar.id,
+                'path': 'PGD.langium',
+                'content': 'grammar PGD\n',
+            }),
+            ('file/create', {'path': 'New.langium'}),
+            ('file/rename', {
+                'file_id': self.grammar.id,
+                'path': 'Renamed.langium',
+            }),
+            ('file/delete', {'file_id': self.grammar.id}),
+            ('file/set-entry', {'file_id': self.grammar.id}),
+            ('export', {}),
+            ('import', {'files': []}),
+        ]
+        for suffix, params in attempts:
+            with self.subTest(endpoint=suffix), self.assertRaises(
+                JsonRpcException,
+            ), mute_logger('odoo.http'):
+                self.make_jsonrpc_request(
+                    f'/dsl/{self.draft.id}/grammar/{suffix}', params,
+                )
+
+    def test_anonymous_user_is_rejected_by_every_repository_endpoint(self):
+        self.authenticate(None, None)
+        attempts = [
+            ('load', {}),
+            ('save', {
+                'file_id': self.grammar.id,
+                'path': 'PGD.langium',
+                'content': 'grammar PGD\n',
+            }),
+            ('file/create', {'path': 'New.langium'}),
+            ('file/rename', {
+                'file_id': self.grammar.id,
+                'path': 'Renamed.langium',
+            }),
+            ('file/delete', {'file_id': self.grammar.id}),
+            ('file/set-entry', {'file_id': self.grammar.id}),
+            ('export', {}),
+            ('import', {'files': []}),
+        ]
+        for suffix, params in attempts:
+            with self.subTest(endpoint=suffix), self.assertRaises(
+                JsonRpcException,
+            ), mute_logger('odoo.http'):
+                self.make_jsonrpc_request(
+                    f'/dsl/{self.draft.id}/grammar/{suffix}', params,
+                )
+
+    def test_non_draft_is_read_only_for_maintainer_and_admin(self):
+        for login in ('grammar_maintainer', 'grammar_admin'):
+            self.authenticate(login, login)
+            workspace = self.make_jsonrpc_request(
+                f'/dsl/{self.active.id}/grammar/load',
+            )
+            self.assertFalse(workspace['permissions']['canEdit'])
+            attempts = [
+                ('save', {
+                        'file_id': self.active_grammar.id,
+                        'path': 'PPG.langium',
+                        'content': 'grammar Changed',
+                }),
+                ('file/create', {'path': 'New.langium'}),
+                ('file/rename', {
+                    'file_id': self.active_grammar.id,
+                    'path': 'Renamed.langium',
+                }),
+                ('file/delete', {'file_id': self.active_grammar.id}),
+                ('file/set-entry', {'file_id': self.active_grammar.id}),
+                ('import', {'files': []}),
+            ]
+            for suffix, params in attempts:
+                with self.subTest(login=login, endpoint=suffix), self.assertRaises(
+                    JsonRpcException,
+                ), mute_logger('odoo.http'):
+                    self.make_jsonrpc_request(
+                        f'/dsl/{self.active.id}/grammar/{suffix}', params,
+                    )
+
+    def test_read_only_editor_page_has_no_mutation_controls(self):
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        read_only = self.url_open(f'/dsl/{self.active.id}/grammar')
+        editable = self.url_open(f'/dsl/{self.draft.id}/grammar')
+
+        self.assertEqual(read_only.status_code, 200)
+        self.assertNotIn('data-grammar-save', read_only.text)
+        self.assertIn('read-only', read_only.text)
+        self.assertIn('data-grammar-validate', read_only.text)
+        self.assertIn('data-grammar-problems', read_only.text)
+        self.assertIn('data-grammar-save', editable.text)
+
+    def test_editor_page_states_parser_deployment_scope(self):
+        self.authenticate('grammar_maintainer', 'grammar_maintainer')
+        editor = self.url_open(f'/dsl/{self.draft.id}/grammar')
+        self.assertIn('do not', editor.text)
+        self.assertIn('deploy a parser', editor.text)
+
+    def test_backend_button_opens_portal_editor(self):
+        action = self.draft.action_open_grammar_editor()
+        self.assertEqual(action['type'], 'ir.actions.act_url')
+        self.assertEqual(action['url'], f'/dsl/{self.draft.id}/grammar')
+
+
+@tagged('post_install', '-at_install')
+class TestDslLifecyclePortal(HttpCase):
+    """Portal publication and draft-version routes (Phase 5)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.maintainer = new_test_user(
+            cls.env,
+            login='lifecycle_maintainer',
+            password='lifecycle_maintainer',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_member'
+            ),
+        )
+        cls.unrelated = new_test_user(
+            cls.env,
+            login='lifecycle_unrelated',
+            password='lifecycle_unrelated',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_member'
+            ),
+        )
+        cls.admin = new_test_user(
+            cls.env,
+            login='lifecycle_admin',
+            password='lifecycle_admin',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_admin'
+            ),
+        )
+
+    def _make_draft(self, acronym, grammar_content):
+        dsl = self.env['itlingo.dsl'].create({
+            'name': f'Lifecycle Portal {acronym}',
+            'acronym': acronym,
+            'version': 'test-1',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.env['itlingo.dsl.file']._create_grammar_text(
+            dsl, f'{acronym.lower()}.langium', grammar_content,
+        )
+        return dsl
+
+    def _csrf_token(self, dsl):
+        page = self.url_open(f'/dsl/{dsl.id}')
+        match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+        self.assertTrue(match, 'DSL page must expose a CSRF token')
+        return match.group(1)
+
+    def test_admin_publishes_valid_draft(self):
+        dsl = self._make_draft('PLOK', VALID_GRAMMAR.format(name='PLOK'))
+        self.authenticate('lifecycle_admin', 'lifecycle_admin')
+        response = self.url_open(
+            f'/dsl/{dsl.id}/publish',
+            data={'csrf_token': self._csrf_token(dsl)},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('message=published', response.url)
+        dsl.invalidate_recordset()
+        self.assertEqual(dsl.status, 'active')
+        self.assertEqual(dsl.published_by_id, self.admin)
+
+    def test_invalid_grammar_publication_fails_with_details(self):
+        dsl = self._make_draft(
+            'PLBAD', 'grammar PLBAD\nentry Model: value=MissingRule;\n',
+        )
+        self.authenticate('lifecycle_admin', 'lifecycle_admin')
+        with mute_logger('odoo.http'):
+            response = self.url_open(
+                f'/dsl/{dsl.id}/publish',
+                data={'csrf_token': self._csrf_token(dsl)},
+            )
+
+        self.assertIn('error=publish_failed', response.url)
+        self.assertIn('MissingRule', response.text)
+        dsl.invalidate_recordset()
+        self.assertEqual(dsl.status, 'draft')
+
+    def test_maintainer_cannot_publish_and_button_is_hidden(self):
+        dsl = self._make_draft('PLMNT', VALID_GRAMMAR.format(name='PLMNT'))
+        self.authenticate('lifecycle_maintainer', 'lifecycle_maintainer')
+        page = self.url_open(f'/dsl/{dsl.id}')
+
+        self.assertNotIn(f'/dsl/{dsl.id}/publish', page.text)
+        self.assertIn('Only a Platform Admin can publish', page.text)
+        self.assertNotIn('id="e_status"', page.text)
+        self.assertIn('Draft', page.text)
+        with mute_logger('odoo.http'):
+            response = self.url_open(
+                f'/dsl/{dsl.id}/publish',
+                data={'csrf_token': self._csrf_token(dsl)},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        dsl.invalidate_recordset()
+        self.assertEqual(dsl.status, 'draft')
+
+    def test_unrelated_user_cannot_publish(self):
+        dsl = self._make_draft('PLDENY', VALID_GRAMMAR.format(name='PLDENY'))
+        # The CSRF token is session-scoped: grab a genuine one from a page the
+        # unrelated user does maintain, so this exercises authorization, not
+        # CSRF rejection.
+        own_dsl = self.env['itlingo.dsl'].create({
+            'name': 'Lifecycle Portal own',
+            'acronym': 'PLOWN',
+            'version': 'test-1',
+            'status': 'draft',
+            'maintainer_ids': [(6, 0, self.unrelated.ids)],
+        })
+        self.authenticate('lifecycle_unrelated', 'lifecycle_unrelated')
+        token = self._csrf_token(own_dsl)
+        with mute_logger('odoo.http'):
+            response = self.url_open(
+                f'/dsl/{dsl.id}/publish', data={'csrf_token': token},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        dsl.invalidate_recordset()
+        self.assertEqual(dsl.status, 'draft')
+
+    def test_maintainer_creates_draft_version(self):
+        dsl = self._make_draft('PLFORK', VALID_GRAMMAR.format(name='PLFORK'))
+        dsl.action_publish()
+        self.authenticate('lifecycle_maintainer', 'lifecycle_maintainer')
+        response = self.url_open(
+            f'/dsl/{dsl.id}/create-draft',
+            data={'csrf_token': self._csrf_token(dsl), 'version': 'test-2'},
+        )
+
+        self.assertIn('message=draft_created', response.url)
+        draft = self.env['itlingo.dsl'].search([
+            ('acronym', '=', 'PLFORK'), ('version', '=', 'test-2'),
+        ])
+        self.assertEqual(draft.status, 'draft')
+        self.assertEqual(
+            draft._grammar_file()._read_text_utf8(),
+            dsl._grammar_file()._read_text_utf8(),
+        )
+        dsl.invalidate_recordset()
+        self.assertEqual(dsl.status, 'active')
+
+@tagged('post_install', '-at_install')
+class TestDocumentDslControllerValidation(TransactionCase):
+    def setUp(self):
+        super().setUp()
+        self.maintainer = new_test_user(
+            self.env,
+            login='document_family_maintainer',
+            password='document_family_maintainer',
+            groups='base.group_portal',
+        )
+        self.editor = new_test_user(
+            self.env,
+            login='document_family_editor',
+            password='document_family_editor',
+            groups='base.group_portal',
+        )
+        self.admin = new_test_user(
+            self.env,
+            login='document_family_admin',
+            password='document_family_admin',
+            groups=(
+                'base.group_portal,'
+                'itlingo_organizations.group_itlingo_admin'
+            ),
+        )
+        self.active_version = self.env['itlingo.dsl'].create({
+            'name': 'Controller Family One',
+            'acronym': 'CFONE',
+            'version': '1.0',
+            'status': 'active',
+        })
+        self.family = self.active_version.family_id
+        self.family.write({
+            'maintainer_ids': [(6, 0, self.maintainer.ids)],
+        })
+        self.deprecated_version = self.env['itlingo.dsl'].create({
+            'name': 'Controller Family One',
+            'acronym': 'CFONE',
+            'version': '0.9',
+            'status': 'deprecated',
+            'family_id': self.family.id,
+        })
+        self.draft_version = self.env['itlingo.dsl'].create({
+            'name': 'Controller Family One',
+            'acronym': 'CFONE',
+            'version': '2.0',
+            'status': 'draft',
+            'family_id': self.family.id,
+        })
+
+    def _portal_with_user(self, user):
+        from odoo.addons.itlingo_website_portal.controllers.portal import (
+            ITLingoPortal,
+        )
+        return ITLingoPortal(), api.Environment(
+            self.env.cr, user.id, dict(self.env.context),
+        )
+
+    def _portal_with_editor(self):
+        return self._portal_with_user(self.editor)
+
+    def test_regular_user_selectable_versions_exclude_deprecated_and_drafts(self):
+        portal, editor_env = self._portal_with_editor()
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            versions = portal._portal_selectable_dsl_versions()
+        self.assertIn(self.active_version, versions)
+        self.assertNotIn(self.deprecated_version, versions)
+        self.assertNotIn(self.draft_version, versions)
+
+    def test_family_maintainer_selectable_versions_include_own_drafts(self):
+        portal, maintainer_env = self._portal_with_user(self.maintainer)
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=maintainer_env),
+        ):
+            versions = portal._portal_selectable_dsl_versions()
+        self.assertIn(self.active_version, versions)
+        self.assertIn(self.draft_version, versions)
+        self.assertNotIn(self.deprecated_version, versions)
+
+    def test_admin_selectable_versions_include_all_statuses(self):
+        portal, admin_env = self._portal_with_user(self.admin)
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=admin_env),
+        ):
+            versions = portal._portal_selectable_dsl_versions()
+        self.assertIn(self.active_version, versions)
+        self.assertIn(self.deprecated_version, versions)
+        self.assertIn(self.draft_version, versions)
+
+    def test_deprecated_document_pin_is_in_edit_dropdown(self):
+        self.family.write({'active': False})
+        document = self.env['itlingo.document'].create({
+            'name': 'Deprecated DSL document',
+            'dsl_family_id': self.family.id,
+            'dsl_version_id': self.deprecated_version.id,
+        })
+        portal, editor_env = self._portal_with_editor()
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            meta = portal._portal_document_form_meta(document)
+        self.assertIn(self.family, meta['dsl_families'])
+        self.assertIn(self.deprecated_version, meta['dsl_versions'])
+
+    def test_deprecated_pin_is_only_accepted_for_that_document(self):
+        document = self.env['itlingo.document'].create({
+            'name': 'Deprecated DSL document',
+            'dsl_family_id': self.family.id,
+            'dsl_version_id': self.deprecated_version.id,
+        })
+        post = {
+            'dsl_family_id': self.family.id,
+            'dsl_version_id': self.deprecated_version.id,
+        }
+        portal, editor_env = self._portal_with_editor()
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal._',
+            lambda text: text,
+        ), patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            values = portal._portal_document_meta_vals(post, document)
+            self.assertEqual(values['dsl_version_id'], self.deprecated_version.id)
+            with self.assertRaises(ValidationError):
+                portal._portal_document_meta_vals(post)
+        active_document = self.env['itlingo.document'].create({
+            'name': 'Active DSL document',
+            'dsl_family_id': self.family.id,
+            'dsl_version_id': self.active_version.id,
+        })
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal._',
+            lambda text: text,
+        ), patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            with self.assertRaises(ValidationError):
+                portal._portal_document_meta_vals(post, active_document)
+
+    def test_controller_rejects_cross_family_version(self):
+        other = self.env['itlingo.dsl'].create({
+            'name': 'Controller Family Two',
+            'acronym': 'CFTWO',
+            'version': '1.0',
+            'status': 'active',
+        })
+        portal, editor_env = self._portal_with_editor()
+        with patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal._',
+            lambda text: text,
+        ), patch(
+            'odoo.addons.itlingo_website_portal.controllers.portal.request',
+            SimpleNamespace(env=editor_env),
+        ):
+            with self.assertRaises(ValidationError):
+                portal._portal_document_meta_vals({
+                    'dsl_family_id': self.family.id,
+                    'dsl_version_id': other.id,
+                })

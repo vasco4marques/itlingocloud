@@ -1,144 +1,170 @@
-# itlingoodoo
+# ITLingoCloud
 
-Skeleton repository for the **ITLingo Cloud** Odoo deployment.
+This repository contains the ITLingoCloud application for Odoo 19. It includes the custom modules, Docker image definition, configuration examples, and deployment scripts.
 
-This repo is intentionally minimal: it pins the project layout, the Odoo
-configuration template, and the `Makefile` that drives Odoo. The actual
-Odoo source and the custom modules live in their own git repositories and
-are pulled into this layout at setup time.
+The custom modules are ordinary directories in this repository. You do not need a separate clone or Git submodules. The Docker image uses upstream Odoo as its base; this repository does not contain Odoo source.
 
----
+ITOI and ITLingo-Chatbot remain separate applications. The modules that connect to those applications belong here; their application source does not.
 
-## Repository layout
+## Contents
 
-```
-itlingoodoo/
-├── odoo/                  # Odoo 19 source (gitignored, clone separately)
-│   └── Makefile           # The ONLY tracked file inside odoo/
-├── custom-addons/         # ITLingo custom modules (gitignored, clone separately)
-│   └── README.md          # Instructions for that repo
-├── config/
-│   ├── odoo.config.example
-│   └── odoo.config        # Local config (gitignored)
-└── README.md
-```
+| Path | Purpose |
+| --- | --- |
+| `custom-addons/` | The nine ITLingoCloud modules and their tests |
+| `Dockerfile` | The application image, with Python and Node.js dependencies |
+| `docker-compose.local.yml` | A local application and PostgreSQL 16 database |
+| `docker-compose.yml` | The existing production configuration for the droplet |
+| `config/` | Examples for local Docker and source installations |
+| `odoo.docker.conf.example` | The production Odoo configuration example |
+| `deploy.sh`, `Makefile.droplet` | The existing production deployment commands |
+| `odoo/Makefile` | Optional commands for a separate upstream Odoo checkout |
+| `scripts/` | Migration, maintenance, and image retention tools |
 
----
+## Get the source
 
-## Requirements
-
-### Python
-
-- **Python 3.12.8** (pinned for this project).
-- Odoo 19 officially requires Python **3.10 or later**; we standardize on
-  3.12.8 to stay aligned with the upcoming Odoo 20 baseline.
-
-### Odoo 19
-
-Per the official Odoo 19 on-premise [source install
-docs](https://www.odoo.com/documentation/19.0/administration/on_premise/source.html):
-
-- **PostgreSQL 13.0 or above** (PostgreSQL 16 recommended).
-  Odoo only supports PostgreSQL — MySQL/MariaDB/SQLite will not work.
-  You must create a dedicated PostgreSQL user (Odoo cannot connect as
-  `postgres`).
-- **Node.js + npm** (Node.js 18 LTS recommended) for asset compilation.
-- **`rtlcss`** for right-to-left languages:
-  ```bash
-  sudo npm install -g rtlcss
-  ```
-- **wkhtmltopdf 0.12.6** for PDF headers/footers (install manually from the
-  upstream package, **not** via pip).
-- Python dependencies from Odoo's `requirements.txt` (installed inside the
-  Odoo checkout — see below).
-
-System packages on Fedora/Debian-likes (PostgreSQL, Node.js, build tools,
-libxml2/libxslt, libjpeg, etc.) are also required — follow the Odoo docs
-linked above for the exact list for your distribution.
-
----
-
-## Setup
-
-### 1. Clone this skeleton
-
-```bash
-git clone <this-repo-url> itlingoodoo
-cd itlingoodoo
+```sh
+git clone https://github.com/vasco4marques/itlingocloud.git
+cd itlingocloud
 ```
 
-After cloning, `odoo/` will contain only `Makefile` and `custom-addons/`
-will contain only `README.md`.
+## Run locally with Docker
 
-### 2. Clone Odoo 19 into `./odoo`
+Install Docker Engine and Docker Compose. Run all commands from this repository root.
 
-The `odoo/` folder is gitignored except for `Makefile`. Clone the Odoo 19
-source **into that folder** (preserving the existing `Makefile`):
+1. Create the local configuration files.
 
-```bash
-# from the project root
-git clone --depth=1 --branch 19.0 https://github.com/odoo/odoo.git odoo-tmp
-# move the Odoo source in alongside the existing Makefile
-mv odoo-tmp/.git odoo-tmp/* odoo-tmp/.[!.]* odoo/ 2>/dev/null
-rmdir odoo-tmp
+   ```sh
+   cp .env.example .env
+   cp config/odoo.local.conf.example config/odoo.local.conf
+   ```
+
+2. Replace `DB_PASSWORD` in `.env` with a private password.
+3. Replace `admin_passwd` in `config/odoo.local.conf` with a different private password.
+
+   The database password connects Odoo to PostgreSQL. The master password protects Odoo database management; it is not the application login password.
+
+4. Build the application image.
+
+   ```sh
+   docker compose -f docker-compose.local.yml build
+   ```
+
+5. Start the application and database.
+
+   ```sh
+   docker compose -f docker-compose.local.yml up -d
+   ```
+
+6. Open <http://localhost:8069/web/database/manager>.
+7. Create a database named `itlingo` with your master password and a private administrator login.
+8. Stop Odoo before you install the custom modules.
+
+   ```sh
+   docker compose -f docker-compose.local.yml stop odoo
+   ```
+
+9. Install the modules into the new database.
+
+   ```sh
+   docker compose -f docker-compose.local.yml run --rm odoo \
+     -d itlingo \
+     -i itlingo_organizations,itlingo_workspace_access,itlingo_documents,itlingo_notifications,itlingo_integration,itlingo_website_portal,itlingo_dsl,itlingo_chatbot_integration,itlingo_templating \
+     --without-demo=all --stop-after-init --no-http
+   ```
+
+10. Start Odoo again.
+
+    ```sh
+    docker compose -f docker-compose.local.yml up -d
+    ```
+
+11. Open <http://localhost:8069/web/login> and use the administrator login that you created.
+
+If port 8069 is occupied, set `LOCAL_ODOO_PORT` in `.env` and use that port in the URLs.
+
+The local configuration uses named volumes for PostgreSQL and the Odoo filestore. It does not publish the database port. Docker Compose keeps these volumes after `down`.
+
+Do not use `down -v` unless you intend to delete the local database and filestore.
+
+### Logs and module updates
+
+```sh
+docker compose -f docker-compose.local.yml logs -f odoo
 ```
 
-(Or clone elsewhere and copy the contents in, as long as `odoo/Makefile`
-from this skeleton is preserved.)
+After a source change, build the image again. If the change requires a module update, stop Odoo and update the affected module before restart.
 
-### 3. Clone the custom addons into `./custom-addons`
-
-```bash
-# from the project root, remove the placeholder README first
-rm custom-addons/README.md
-git clone <custom-addons-repo-url> custom-addons
+```sh
+docker compose -f docker-compose.local.yml build
+docker compose -f docker-compose.local.yml stop odoo
+docker compose -f docker-compose.local.yml run --rm odoo \
+  -d itlingo -u itlingo_website_portal --stop-after-init --no-http
+docker compose -f docker-compose.local.yml up -d --renew-anon-volumes
 ```
 
-### 4. Create the Odoo config
+The upstream image declares an anonymous volume for the addons directory. Use `--renew-anon-volumes` after an image rebuild to prevent reuse of old module files.
 
-```bash
-cp config/odoo.config.example config/odoo.config
-# then edit config/odoo.config and set:
-#   - db_user / db_password / db_host / db_port
-#   - admin_passwd
-#   - addons_path  (absolute path to ./custom-addons in this checkout)
+### Tests
+
+Use a separate database for module tests. Do not run tests against your application database.
+
+```sh
+docker compose -f docker-compose.local.yml run --rm odoo \
+  -d itlingo_test -i itlingo_templating \
+  --test-enable --test-tags /itlingo_templating \
+  --without-demo=all --stop-after-init --no-http
 ```
 
-### 5. Python environment
+The portal tests include a browser test that requires Chrome or Chromium inside the test container. The current application image does not contain either browser. Odoo skips that test when it cannot find a browser, so this command does not provide full browser coverage with the application image alone.
 
-```bash
-python3.12 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip wheel
-pip install -r odoo/requirements.txt
+The JavaScript components have their own `package.json` files and tests. Their README files describe their build commands.
+
+## Production
+
+`docker-compose.yml` retains the existing droplet configuration. It uses host PostgreSQL, host networking, the host filestore, and UID/GID `110:114`. It is not the local installation configuration.
+
+The production host requires `.env` and `odoo.docker.conf`, based on the examples in this repository. Replace all example passwords. The configuration binds Odoo to loopback; the existing reverse proxy provides public access.
+
+`deploy.sh` builds and publishes the image, then updates the existing droplet. The script contains the current image name, server address, and SSH key path. Examine those values before use. It requires a Git commit for the image tag.
+
+Do not run `deploy.sh` to test a local installation. It changes the production server.
+
+## Optional source installation
+
+Clone upstream Odoo 19 outside this repository. Copy its checkout contents into `odoo/`, but retain this repository's `odoo/Makefile`.
+
+Install the upstream Python requirements and the additional Python packages from `Dockerfile`. Use Node.js 22 and install the runtime dependencies with `npm ci --omit=dev` in these directories:
+
+- `custom-addons/itlingo_dsl/services_compiler/`
+- `custom-addons/itlingo_templating/parser/`
+
+Copy `config/odoo.config.example` to `config/odoo.config`. Set the database credentials, master password, and absolute addons path. The source Makefile uses database `itlingo_dev`.
+
+```sh
+make -C odoo run
 ```
 
-### 6. PostgreSQL user
+Docker is the recommended handover path because it installs these dependencies together.
 
-```bash
-sudo -u postgres createuser -s <your_db_user>
-sudo -u postgres psql -c "ALTER USER <your_db_user> WITH PASSWORD '<your_db_password>';"
-```
+## DSL services runtime
 
-### 7. Run Odoo
+Author-supplied DSL services run with the permissions of the application process inside its container. Only trusted authors should publish services code.
 
-The `odoo/Makefile` is preconfigured to use `../config/odoo.config` and the
-`itlingo_dev` database:
+## External integrations
 
-```bash
-cd odoo
-make run            # start Odoo
-make upgrade_custom # upgrade the ITLingo custom modules only
-make upgrade_all    # upgrade every installed module
-make upgrade        # upgrade custom modules then run Odoo
-```
+Configure ITOI and ITLingo-Chatbot separately. Their connection settings and matching secrets depend on the target installation. This repository includes the Odoo integration modules, not those external services.
 
----
+### Shared chatbot tables
 
-## Notes
+The current chatbot integration reads tables in the same PostgreSQL database as Odoo. The chatbot's Django migrations own these tables. Odoo deliberately does not create them.
 
-- `config/odoo.config` is gitignored — never commit secrets. Always edit
-  `config/odoo.config.example` if the template needs to change.
-- `odoo/` and `custom-addons/` are gitignored except for the two tracked
-  helper files (`odoo/Makefile`, `custom-addons/README.md`). This keeps
-  the two upstream repositories cleanly decoupled from this skeleton.
+Before you use chatbot features, have the chatbot maintainer apply its migrations to the target database. Configure database access and the external service connections with that maintainer.
+
+Without those migrations, a fresh Odoo installation reports `Model ... has no table` for the chatbot models. The modules can install and the login page can load, but chatbot features are not ready for use. The local Compose configuration does not start the chatbot or apply its migrations.
+
+Do not create substitute tables in Odoo. The chatbot owns their schema.
+
+## Files excluded from delivery
+
+Git excludes local secrets, database exports, virtual environments, Node.js dependencies, Python caches, and upstream Odoo source. The repository includes the existing compiled browser assets and Node.js bundles that Odoo requires at runtime.
+

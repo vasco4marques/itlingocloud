@@ -1,0 +1,193 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+const parserPath = path.resolve('dist/parser.mjs');
+const grammarPath = path.resolve('test/qualified.langium');
+const servicesPath = path.resolve('test/qualified-services.mjs');
+
+function parse(source) {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'itlingo-parser-test-'));
+    const sourcePath = path.join(workspace, 'source.qref');
+    writeFileSync(sourcePath, source, 'utf8');
+    try {
+        const proc = spawnSync(process.execPath, [
+            parserPath,
+            grammarPath,
+            sourcePath,
+            'Qualified reference specification',
+            'all',
+            servicesPath,
+        ], { encoding: 'utf8' });
+        return {
+            status: proc.status,
+            result: JSON.parse(proc.stdout),
+            stderr: proc.stderr,
+        };
+    } finally {
+        rmSync(workspace, { recursive: true, force: true });
+    }
+}
+
+function parseCrossFile(source) {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'itlingo-parser-import-test-'));
+    const sourcePath = path.join(workspace, 'source.cross');
+    writeFileSync(sourcePath, source, 'utf8');
+    try {
+        const proc = spawnSync(process.execPath, [
+            parserPath,
+            path.resolve('test/cross-file.langium'),
+            sourcePath,
+            'Cross-file specification',
+            'all',
+            path.resolve('test/cross-file-services.mjs'),
+        ], { encoding: 'utf8' });
+        return {
+            status: proc.status,
+            result: JSON.parse(proc.stdout),
+            stderr: proc.stderr,
+        };
+    } finally {
+        rmSync(workspace, { recursive: true, force: true });
+    }
+}
+
+function parseNestedUnion(source) {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'itlingo-parser-nested-union-test-'));
+    const sourcePath = path.join(workspace, 'source.nested-union');
+    writeFileSync(sourcePath, source, 'utf8');
+    try {
+        const proc = spawnSync(process.execPath, [
+            parserPath,
+            path.resolve('test/nested-union.langium'),
+            sourcePath,
+            'Nested union specification',
+            'all',
+        ], { encoding: 'utf8' });
+        return {
+            status: proc.status,
+            result: JSON.parse(proc.stdout),
+            stderr: proc.stderr,
+        };
+    } finally {
+        rmSync(workspace, { recursive: true, force: true });
+    }
+}
+
+test('nested union resolves concrete member references', () => {
+    const { status, result, stderr } = parseNestedUnion('target targetOne use targetOne');
+
+    assert.equal(status, 0, stderr || result.error);
+    assert.equal(result.success, true);
+    assert.deepEqual(result.ast.elements[1].target, { $ref: 'targetOne' });
+    assert.deepEqual(result.diagnostics, []);
+});
+
+test('nested union retains unresolved-reference diagnostics for typos', () => {
+    const { status, result } = parseNestedUnion('target targetOne use missingTarget');
+
+    assert.equal(status, 1);
+    assert.equal(result.success, false);
+    assert.ok(result.diagnostics.some(diagnostic =>
+        diagnostic.message.includes(
+            "Could not resolve reference to Outer named 'missingTarget'",
+        ),
+    ));
+});
+
+test('injected ScopeProvider resolves containment-qualified references', () => {
+    const { status, result, stderr } = parse(
+        'entity e_VAT { attribute VATValue } derived e_VAT.VATValue',
+    );
+
+    assert.equal(status, 0, stderr || result.error);
+    assert.equal(result.success, true);
+    assert.deepEqual(result.ast.uses[0].from, { $ref: 'e_VAT.VATValue' });
+    assert.deepEqual(result.diagnostics, []);
+});
+
+test('injected ScopeProvider retains unresolved-reference diagnostics for typos', () => {
+    const { status, result } = parse(
+        'entity e_VAT { attribute VATValue } derived e_VAT.Nope',
+    );
+
+    assert.equal(status, 1);
+    assert.equal(result.success, false);
+    assert.ok(result.diagnostics.some(diagnostic =>
+        diagnostic.message.includes(
+            "Could not resolve reference to Attribute named 'e_VAT.Nope'",
+        ),
+    ));
+});
+
+test('flattened imported package resolves through the shared global index', () => {
+    const { status, result, stderr } = parseCrossFile(
+        'Package p_Ordering Import p_Billing.* System Ordering '
+        + 'derived e_VAT.VATValue\n'
+        + 'Package p_Billing System Billing '
+        + 'Entity e_VAT { attribute VATValue }',
+    );
+
+    assert.equal(status, 0, stderr || result.error);
+    assert.equal(result.success, true);
+    assert.deepEqual(
+        result.ast.packages[0].system.concepts[0].from,
+        { $ref: 'e_VAT.VATValue' },
+    );
+});
+
+test('flattened imported package retains typo diagnostics', () => {
+    const { status, result } = parseCrossFile(
+        'Package p_Ordering Import p_Billing.* System Ordering '
+        + 'derived e_VAT.Nope\n'
+        + 'Package p_Billing System Billing '
+        + 'Entity e_VAT { attribute VATValue }',
+    );
+
+    assert.equal(status, 1);
+    assert.ok(result.diagnostics.some(diagnostic =>
+        diagnostic.message.includes(
+            "Could not resolve reference to Attribute named 'e_VAT.Nope'",
+        ),
+    ));
+});
+
+test('ambiguity warnings stay on stderr', () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'itlingo-parser-ambiguity-test-'));
+    const grammarPath = path.join(workspace, 'ambiguous.langium');
+    const sourcePath = path.join(workspace, 'source.ambiguous');
+    writeFileSync(grammarPath, `grammar Ambiguous
+
+entry Model:
+    elements+=(Foo | Bar)*;
+
+Foo:
+    'item' value=ID;
+
+Bar:
+    'item' value=ID;
+
+terminal ID: /[a-zA-Z_][a-zA-Z0-9_]*/;
+hidden terminal WS: /\\s+/;
+`, 'utf8');
+    writeFileSync(sourcePath, 'item value', 'utf8');
+    try {
+        const proc = spawnSync(process.execPath, [
+            parserPath,
+            grammarPath,
+            sourcePath,
+            'Ambiguous specification',
+            'all',
+        ], { encoding: 'utf8' });
+
+        assert.equal(proc.status, 0, proc.stderr);
+        const result = JSON.parse(proc.stdout);
+        assert.equal(result.success, true);
+        assert.match(proc.stderr, /Ambiguous Alternatives Detected/);
+    } finally {
+        rmSync(workspace, { recursive: true, force: true });
+    }
+});

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Portal home cards -->
+    <template id="portal_my_home_notifications"
+              name="Portal Notifications"
+              inherit_id="portal.portal_my_home"
+              priority="65">
+        <xpath expr="//div[hasclass('o_portal_docs')]" position="inside">
+            <t t-call="portal.portal_docs_entry">
+                <t t-set="icon" t-value="'/itlingo_notifications/static/description/icon.png'"/>
+                <t t-set="title">Notifications</t>
+                <t t-set="url" t-value="'/my/notifications'"/>
+                <t t-set="text">View your notifications</t>
+                <t t-set="count" t-value="notification_count"/>
+                <t t-set="placeholder_count" t-value="'notification_count'"/>
+            </t>
+        </xpath>
+    </template>
+
+    <!-- Notification list -->
+    <template id="portal_my_notifications" name="My Notifications">
+        <t t-call="portal.portal_layout">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 mb-3">
+                <h1 class="h4 mb-0">Notifications</h1>
+                <form action="/my/notifications/mark_all_read" method="post" class="d-inline">
+                    <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                    <button type="submit" class="btn btn-sm btn-outline-primary">
+                        <i class="fa fa-check me-1"/>Mark all as read
+                    </button>
+                </form>
+            </div>
+
+            <t t-if="not notifications">
+                <div class="alert alert-light border">No notifications.</div>
+            </t>
+            <t t-if="notifications">
+                <div class="card border-0 shadow-sm rounded-3">
+                    <div class="card-header bg-white border-0 p-3">
+                        <h5 class="fw-semibold mb-0">Notifications (<t t-out="notif_count"/>)</h5>
+                    </div>
+                    <div class="list-group list-group-flush">
+                        <t t-foreach="notifications" t-as="notif">
+                            <div t-attf-class="list-group-item #{'fw-bold' if not notif.is_read else ''}">
+                                <div class="d-flex justify-content-between">
+                                    <div>
+                                        <span t-attf-class="badge rounded-pill me-2
+                                            #{'text-bg-info' if notif.notification_type == 'invite'
+                                              else 'text-bg-warning' if notif.notification_type == 'status_change'
+                                              else 'text-bg-primary' if notif.notification_type == 'assignment'
+                                              else 'text-bg-secondary'}">
+                                            <t t-out="dict(notif._fields['notification_type'].selection).get(notif.notification_type)"/>
+                                        </span>
+                                        <t t-out="notif.title"/>
+                                    </div>
+                                    <small class="text-muted">
+                                        <t t-out="notif.create_date" t-options='{"widget": "datetime"}'/>
+                                    </small>
+                                </div>
+                                <div class="mt-1 text-muted small" t-if="notif.body">
+                                    <t t-out="notif.body"/>
+                                </div>
+                                <div class="mt-2" t-if="notif.id in actionable_ids">
+                                    <form t-attf-action="/my/notifications/#{notif.id}/respond" method="post" class="d-inline">
+                                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                        <input type="hidden" name="action" value="accept"/>
+                                        <button type="submit" class="btn btn-sm btn-success">
+                                            <i class="fa fa-check me-1"/>Accept
+                                        </button>
+                                    </form>
+                                    <form t-attf-action="/my/notifications/#{notif.id}/respond" method="post" class="d-inline ms-1">
+                                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                        <input type="hidden" name="action" value="reject"/>
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            <i class="fa fa-times me-1"/>Decline
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        </t>
+                    </div>
+                </div>
+                <t t-call="itlingo_website_portal.portal_list_pager"/>
+            </t>
+        </t>
+    </template>
+
+</odoo>

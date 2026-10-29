@@ -1,0 +1,644 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- DSL list -->
+    <template id="portal_dsl_list" name="DSLs">
+        <t t-call="portal.portal_layout">
+            <t t-set="breadcrumbs_searchbar" t-value="True"/>
+            <t t-call="portal.portal_searchbar">
+                <t t-set="title">DSLs</t>
+            </t>
+            <div t-if="dsl_message == 'deleted'" class="alert alert-success" role="alert">
+                The DSL was deleted and removed from the chatbot knowledge base.
+            </div>
+            <div t-if="dsl_error" class="alert alert-danger" role="alert">
+                Something went wrong. Please try again.
+            </div>
+            <div t-if="can_manage_dsls" class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                <a href="/dsl/new" class="btn btn-primary">
+                    <i class="fa fa-plus me-1"/>New DSL
+                </a>
+            </div>
+            <div class="card itlingo-portal-filter-card shadow-sm border-0 rounded-3 mb-4">
+                <div class="card-body">
+                    <p class="text-muted small text-uppercase fw-semibold mb-3">DSL filters</p>
+                    <form method="get" action="/dsl" class="row g-3 align-items-end">
+                        <div class="col-md-6 col-lg-4">
+                            <label class="form-label small text-muted mb-1" for="dsl_filter_name">Name or acronym</label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light border-end-0"><i class="fa fa-search text-muted"/></span>
+                                <input type="search" class="form-control border-start-0 bg-light" id="dsl_filter_name"
+                                       name="name" t-att-value="filters.get('name') or ''" placeholder="Name or acronym"/>
+                            </div>
+                        </div>
+                        <div class="col-12 col-lg-4 d-flex flex-wrap gap-2">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fa fa-search me-1"/>Filter
+                            </button>
+                            <a href="/dsl" class="btn btn-outline-secondary">Clear filters</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <t t-if="not dsls">
+                <div class="alert alert-warning" role="alert">
+                    <t t-if="can_manage_dsls">No DSLs found. Use <strong>New DSL</strong> to create one.</t>
+                    <t t-else="">No DSLs found.</t>
+                </div>
+            </t>
+            <div t-if="dsls" class="card border-0 shadow-sm rounded-3">
+                <div class="card-header bg-white border-0 p-3">
+                    <h5 class="fw-semibold mb-0">DSLs (<t t-out="dsl_count"/>)</h5>
+                </div>
+                <div class="card-body p-0 table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>
+                            <t t-call="itlingo_website_portal.portal_sort_th">
+                                <t t-set="sort_key" t-value="'acronym'"/>
+                                <t t-set="sort_label">Acronym</t>
+                            </t>
+                        </th>
+                        <th>
+                            <t t-call="itlingo_website_portal.portal_sort_th">
+                                <t t-set="sort_key" t-value="'name'"/>
+                                <t t-set="sort_label">Name</t>
+                            </t>
+                        </th>
+                        <th>
+                            <t t-call="itlingo_website_portal.portal_sort_th">
+                                <t t-set="sort_key" t-value="'version'"/>
+                                <t t-set="sort_label">Version</t>
+                            </t>
+                        </th>
+                        <th>
+                            <t t-call="itlingo_website_portal.portal_sort_th">
+                                <t t-set="sort_key" t-value="'status'"/>
+                                <t t-set="sort_label">Status</t>
+                            </t>
+                        </th>
+                        <th t-if="show_dsl_management_columns" class="text-center">Files</th>
+                        <th t-if="show_dsl_management_columns" class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr t-foreach="dsls" t-as="dsl_rec">
+                        <td>
+                            <a t-attf-href="/dsl/#{dsl_rec.id}">
+                                <strong><t t-out="dsl_rec.acronym"/></strong>
+                            </a>
+                        </td>
+                        <td><t t-out="dsl_rec.name"/></td>
+                        <td><t t-out="dsl_rec.version"/></td>
+                        <td>
+                            <span t-attf-class="badge #{'bg-success' if dsl_rec.status == 'active' else 'bg-secondary'}">
+                                <t t-out="dict(dsl_rec._fields['status'].selection).get(dsl_rec.status)"/>
+                            </span>
+                        </td>
+                        <td t-if="show_dsl_management_columns" class="text-center">
+                            <span class="badge bg-info text-dark"><t t-out="len(dsl_rec.file_ids)"/></span>
+                        </td>
+                        <td t-if="show_dsl_management_columns" class="text-end text-nowrap">
+                            <a t-if="dsl_rec.id in editable_dsl_ids"
+                               t-attf-href="/dsl/#{dsl_rec.id}"
+                               class="btn btn-sm btn-link text-primary p-1"
+                               title="Edit" aria-label="Edit">
+                                <i class="fa fa-pencil fa-lg"/>
+                            </a>
+                            <a t-else=""
+                               t-attf-href="/dsl/#{dsl_rec.id}"
+                               class="btn btn-sm btn-link text-primary p-1"
+                               title="View" aria-label="View">
+                                <i class="fa fa-eye fa-lg"/>
+                            </a>
+                            <form t-if="can_manage_dsls" t-attf-action="/dsl/#{dsl_rec.id}/delete" method="post" class="d-inline">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <button type="submit" class="btn btn-sm btn-link text-danger p-1"
+                                        title="Delete DSL" aria-label="Delete DSL"
+                                        onclick="return confirm('Delete this DSL? This also removes it from the chatbot knowledge base and cannot be undone.');">
+                                    <i class="fa fa-trash fa-lg"/>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                </tbody>
+                </table>
+                </div>
+            </div>
+            <t t-call="itlingo_website_portal.portal_list_pager"/>
+        </t>
+    </template>
+
+    <!-- DSL create -->
+    <template id="portal_dsl_new" name="New DSL">
+        <t t-call="portal.portal_layout">
+            <div class="container py-3">
+                <h1 class="h4 mb-3">Create DSL</h1>
+                <div t-if="error.get('_form')" class="alert alert-danger" role="alert">
+                    <t t-out="error['_form']"/>
+                </div>
+                <form action="/dsl/new" method="post" class="mt-3">
+                    <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                    <div class="row g-3">
+                        <div class="col-md-8">
+                            <label class="form-label" for="dsl_name">Name</label>
+                            <input type="text" class="form-control" name="name" id="dsl_name" required="required"
+                                   t-att-value="form.get('name') or ''"/>
+                            <div t-if="error.get('name')" class="text-danger small mt-1"><t t-out="error['name']"/></div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="dsl_acronym">Acronym</label>
+                            <input type="text" class="form-control" name="acronym" id="dsl_acronym" required="required"
+                                   t-att-value="form.get('acronym') or ''"/>
+                            <div class="form-text">Used as the language key in the chatbot knowledge base.</div>
+                            <div t-if="error.get('acronym')" class="text-danger small mt-1"><t t-out="error['acronym']"/></div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="dsl_version">Version</label>
+                            <input type="text" class="form-control" name="version" id="dsl_version"
+                                   t-att-value="form.get('version') or '1.0'"/>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="dsl_status">Status</label>
+                            <span class="form-control-plaintext text-info">Draft</span>
+                            <input type="hidden" name="status" value="draft"/>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="dsl_ext">File extensions</label>
+                            <input type="text" class="form-control" name="file_extensions" id="dsl_ext"
+                                   placeholder=".ext1,.ext2" t-att-value="form.get('file_extensions') or ''"/>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="dsl_doc_url">Documentation URL</label>
+                            <input type="url" class="form-control" name="documentation_url" id="dsl_doc_url"
+                                   t-att-value="form.get('documentation_url') or ''"/>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="dsl_desc">Description</label>
+                            <textarea class="form-control" name="description" id="dsl_desc" rows="3"><t t-out="form.get('description') or ''"/></textarea>
+                        </div>
+                    </div>
+                    <div class="form-text mt-2">After creating the DSL you can upload its grammar, validation, examples and specification files.</div>
+                    <div class="d-flex gap-2 mt-3">
+                        <button type="submit" class="btn btn-primary">Create</button>
+                        <a href="/dsl" class="btn btn-outline-secondary">Cancel</a>
+                    </div>
+                </form>
+            </div>
+        </t>
+    </template>
+
+    <!-- DSL read-only detail (public catalog view) -->
+    <template id="portal_dsl_view" name="DSL details">
+        <t t-call="portal.portal_layout">
+            <div class="container py-3">
+                <h1 class="h4 mb-3">
+                    <t t-out="dsl.acronym"/> <span class="text-muted">·</span> <t t-out="dsl.name"/>
+                </h1>
+
+                <div t-if="dsl.description" class="card border-0 shadow-sm rounded-3 mb-4">
+                    <div class="card-body">
+                        <div t-field="dsl.description"/>
+                    </div>
+                </div>
+
+                <div class="card border-0 shadow-sm rounded-3">
+                    <div class="card-body">
+                        <p class="text-muted small text-uppercase fw-semibold mb-3">Details</p>
+                        <dl class="row mb-0 small">
+                            <dt class="col-sm-3 text-muted">Version</dt>
+                            <dd class="col-sm-9"><t t-out="dsl.version"/></dd>
+                            <dt class="col-sm-3 text-muted">Status</dt>
+                            <dd class="col-sm-9">
+                                <span t-attf-class="badge #{'bg-success' if dsl.status == 'active' else 'bg-secondary'}">
+                                    <t t-out="dict(dsl._fields['status'].selection).get(dsl.status)"/>
+                                </span>
+                            </dd>
+                            <dt class="col-sm-3 text-muted">File extensions</dt>
+                            <dd class="col-sm-9"><t t-out="dsl.file_extensions or '—'"/></dd>
+                            <dt class="col-sm-3 text-muted">Created</dt>
+                            <dd class="col-sm-9">
+                                <t t-call="itlingo_website_portal.portal_date">
+                                    <t t-set="date_value" t-value="dsl.create_date"/>
+                                </t>
+                            </dd>
+                            <dt class="col-sm-3 text-muted">Documentation</dt>
+                            <dd class="col-sm-9">
+                                <a t-if="dsl.documentation_url" t-att-href="dsl.documentation_url"
+                                   target="_blank" rel="noopener noreferrer">
+                                    <t t-out="dsl.documentation_url"/>
+                                </a>
+                                <t t-else="">—</t>
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+
+                <div t-if="can_view_dsl_files" class="card border-0 shadow-sm rounded-3 mt-4">
+                    <div class="card-body">
+                        <p class="text-muted small text-uppercase fw-semibold mb-3">Definition files</p>
+                        <t t-set="public_files" t-value="dsl.file_ids.filtered(lambda f: f.is_enabled)"/>
+                        <t t-if="public_files">
+                            <ul class="list-group list-group-flush mb-0">
+                                <li t-foreach="public_files" t-as="f"
+                                    class="list-group-item d-flex align-items-center justify-content-between px-0">
+                                    <span>
+                                        <i class="fa fa-file-o me-2 text-muted"/>
+                                        <a t-attf-href="/dsl/#{dsl.id}/files/#{f.id}/download"><t t-out="f.file_name"/></a>
+                                    </span>
+                                    <span class="badge bg-light text-dark border text-capitalize">
+                                        <t t-out="f.file_type"/>
+                                    </span>
+                                </li>
+                            </ul>
+                        </t>
+                        <t t-else="">
+                            <p class="text-muted fst-italic mb-0">No definition files published yet.</p>
+                        </t>
+                    </div>
+                </div>
+            </div>
+        </t>
+    </template>
+
+    <!-- DSL edit (metadata + files) -->
+    <template id="portal_dsl_edit" name="Edit DSL">
+        <t t-call="portal.portal_layout">
+            <div class="container py-3">
+                <h1 class="h4 mb-3">
+                    <t t-out="dsl.acronym"/> <span class="text-muted">·</span> <t t-out="dsl.name"/>
+                </h1>
+
+                <div t-if="dsl_message == 'created'" class="alert alert-success" role="alert">DSL created. You can now upload its definition files below.</div>
+                <div t-if="dsl_message == 'saved'" class="alert alert-success" role="alert">Changes saved.</div>
+                <div t-if="dsl_message == 'validated'" class="alert alert-success" role="alert">
+                    Draft grammar and services were validated without publishing.
+                </div>
+                <div t-if="dsl_error == 'validate_failed'" class="alert alert-danger" role="alert">
+                    <p class="mb-1 fw-semibold">Draft validation failed.</p>
+                    <pre t-if="validate_error" class="mb-0 small" style="white-space: pre-wrap;"><t t-out="validate_error"/></pre>
+                </div>
+                <div t-if="dsl_message == 'file_added'" class="alert alert-success" role="alert">File uploaded and pushed to the chatbot knowledge base.</div>
+                <div t-if="dsl_message == 'file_removed'" class="alert alert-success" role="alert">File removed.</div>
+                <div t-if="dsl_message == 'file_updated'" class="alert alert-success" role="alert">File updated.</div>
+                <div t-if="dsl_message == 'maint_added'" class="alert alert-success" role="alert">Maintainer added.</div>
+                <div t-if="dsl_message == 'maint_removed'" class="alert alert-success" role="alert">Maintainer removed.</div>
+                <div t-if="dsl_error == 'maint_email_required'" class="alert alert-danger" role="alert">Enter an email address to add a maintainer.</div>
+                <div t-if="dsl_error == 'maint_user_not_found'" class="alert alert-danger" role="alert">No user found with that email. Maintainers must already have an ITLingo account.</div>
+                <div t-if="dsl_error == 'maint_already'" class="alert alert-warning" role="alert">That user is already a maintainer.</div>
+                <div t-if="dsl_error == 'upload_failed'" class="alert alert-danger" role="alert">
+                    <t t-if="upload_error" t-out="upload_error"/>
+                    <t t-else="">Upload failed. Grammar files must use unique relative <code>.langium</code> paths.</t>
+                </div>
+                <div t-if="dsl_error == 'no_file'" class="alert alert-danger" role="alert">Please choose a file to upload.</div>
+                <div t-if="dsl_error == 'bad_type'" class="alert alert-danger" role="alert">Invalid file type.</div>
+                <div t-if="dsl_message == 'published'" class="alert alert-success" role="alert">
+                    This version is now active and the chatbot knowledge base has been refreshed.
+                    Templating and ITOI obtain the published grammar from the registry on their
+                    next use, with no rebuild or redeployment.
+                </div>
+                <div t-if="dsl_message == 'draft_created'" class="alert alert-success" role="alert">
+                    Draft version created. Edit its grammar and definition files here, then publish
+                    when ready. The source version was not modified.
+                </div>
+                <div t-if="dsl_error == 'publish_failed'" class="alert alert-danger" role="alert">
+                    <p class="mb-1 fw-semibold">Publication failed.</p>
+                    <pre t-if="publish_error" class="mb-0 small" style="white-space: pre-wrap;"><t t-out="publish_error"/></pre>
+                </div>
+                <div t-if="dsl_error == 'draft_failed'" class="alert alert-danger" role="alert">
+                    <p class="mb-1 fw-semibold">Could not create the draft version.</p>
+                    <pre t-if="publish_error" class="mb-0 small" style="white-space: pre-wrap;"><t t-out="publish_error"/></pre>
+                </div>
+                <div t-if="error.get('_form')" class="alert alert-danger" role="alert"><t t-out="error['_form']"/></div>
+
+                <!-- Lifecycle & publication -->
+                <div class="card border-0 shadow-sm rounded-3 mb-4">
+                    <div class="card-body">
+                        <p class="text-muted small text-uppercase fw-semibold mb-3">Lifecycle &amp; publication</p>
+                        <t t-set="status_badges" t-value="{'draft': 'info', 'active': 'success', 'deprecated': 'warning'}"/>
+                        <t t-set="lifecycle_grammar" t-value="dsl.file_ids.filtered(lambda f: f.file_type == 'grammar')"/>
+                        <t t-set="lifecycle_services" t-value="dsl.file_ids.filtered(lambda f: f.file_type == 'services')"/>
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                            <span t-attf-class="badge text-capitalize bg-#{status_badges.get(dsl.status, 'secondary')}">
+                                <t t-out="dsl.status"/>
+                            </span>
+                            <t t-if="lifecycle_grammar">
+                                <t t-set="lifecycle_entry" t-value="lifecycle_grammar.filtered(lambda f: f.is_entry)"/>
+                                <span class="badge bg-light text-dark">
+                                    <t t-out="len(lifecycle_grammar)"/>
+                                    <t t-out="'file' if len(lifecycle_grammar) == 1 else 'files'"/>
+                                </span>
+                                <small t-if="lifecycle_entry" class="text-muted">
+                                    Entry: <code t-out="lifecycle_entry.relative_path"/>
+                                </small>
+                                <span t-if="dsl.grammar_validation_result == 'valid' and dsl.grammar_validation_is_current"
+                                      class="badge bg-success">Grammar valid</span>
+                                <span t-elif="dsl.grammar_validation_result == 'invalid' and dsl.grammar_validation_is_current"
+                                      class="badge bg-danger">Grammar invalid</span>
+                                <span t-elif="dsl.grammar_validation_result"
+                                      class="badge bg-warning text-dark">Validation outdated</span>
+                                <span t-else="" class="badge bg-secondary">Not validated</span>
+                            </t>
+                            <t t-if="lifecycle_services">
+                                <t t-set="lifecycle_services_entry" t-value="lifecycle_services.filtered(lambda f: f.is_entry)"/>
+                                <span class="badge bg-light text-dark">
+                                    <t t-out="len(lifecycle_services)"/>
+                                    <t t-out="'services file' if len(lifecycle_services) == 1 else 'services files'"/>
+                                </span>
+                                <small t-if="lifecycle_services_entry" class="text-muted">
+                                    Services entry: <code t-out="lifecycle_services_entry.relative_path"/>
+                                </small>
+                                <span t-if="dsl.services_compile_result == 'ok' and dsl.services_compile_is_current"
+                                      class="badge bg-success">Services compiled</span>
+                                <span t-elif="dsl.services_compile_result == 'error' and dsl.services_compile_is_current"
+                                      class="badge bg-danger">Services errors</span>
+                                <span t-elif="dsl.services_compile_result"
+                                      class="badge bg-warning text-dark">Services compilation outdated</span>
+                                <span t-else="" class="badge bg-secondary">Services not compiled</span>
+                            </t>
+                            <small t-if="dsl.grammar_validation_time" class="text-muted">
+                                Last validated <t t-out="dsl.grammar_validation_time"/>
+                                (<t t-out="dsl.grammar_validator_version"/>)
+                            </small>
+                            <small t-if="dsl.services_compile_time" class="text-muted">
+                                · Services last compiled <t t-out="dsl.services_compile_time"/>
+                            </small>
+                            <small t-if="dsl.published_at" class="text-muted">
+                                · Published <t t-out="dsl.published_at"/> by <t t-out="dsl.published_by_id.name"/>
+                            </small>
+                        </div>
+                        <div t-if="dsl.services_compile_result == 'error'" class="alert alert-danger py-2 px-3 small mb-3" role="alert">
+                            <b>Services compilation failed.</b>
+                            The DSL cannot be published until it compiles. Open the
+                            <a t-attf-href="/dsl/#{dsl.id}/grammar">Grammar Editor</a> to see the diagnostics.
+                        </div>
+                            <form t-if="can_validate_draft and dsl.status == 'draft'"
+                                  t-attf-action="/dsl/#{dsl.id}/validate-draft"
+                                  method="post" class="d-inline">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <button type="submit" class="btn btn-outline-info"
+                                        onclick="return confirm('Validate the current grammar and services without publishing this draft?');">
+                                    <i class="fa fa-check-circle me-1"/>Validate Draft
+                                </button>
+                            </form>
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                            <form t-if="can_manage_dsls and dsl.status == 'draft'" t-attf-action="/dsl/#{dsl.id}/publish" method="post" class="d-inline">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <button type="submit" class="btn btn-success"
+                                        onclick="return confirm('Publishing validates the grammar on the server, deprecates any previously active version of this acronym, and refreshes the chatbot knowledge base. It does not build or deploy the templating or ITOI parsers. Continue?');">
+                                    <i class="fa fa-rocket me-1"/>Validate &amp; Publish
+                                </button>
+                            </form>
+                            <form t-if="can_manage_dsls and dsl.status == 'deprecated'" t-attf-action="/dsl/#{dsl.id}/publish" method="post" class="d-inline">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <button type="submit" class="btn btn-outline-success"
+                                        onclick="return confirm('This re-activates this previous version: the grammar is revalidated on the server, the currently active version is deprecated, and the chatbot knowledge base is refreshed with this version. Continue?');">
+                                    <i class="fa fa-history me-1"/>Reactivate this version
+                                </button>
+                            </form>
+                            <small t-if="not can_manage_dsls and dsl.status in ('draft', 'deprecated')"
+                                   class="text-muted">
+                                Only a Platform Admin can publish or reactivate this version.
+                            </small>
+                            <form t-if="dsl.status != 'draft'" t-attf-action="/dsl/#{dsl.id}/create-draft" method="post"
+                                  class="d-inline-flex align-items-center gap-2">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <label class="form-label mb-0 small text-muted" for="lc_version">New draft version</label>
+                                <input type="text" class="form-control form-control-sm" style="max-width: 8rem;"
+                                       name="version" id="lc_version" t-att-value="suggested_version"/>
+                                <button type="submit" class="btn btn-outline-primary btn-sm">
+                                    <i class="fa fa-code-fork me-1"/>Create draft version
+                                </button>
+                            </form>
+                        </div>
+                        <p class="text-muted small mt-3 mb-0">
+                            Draft saves never change the chatbot knowledge base; only publication does.
+                            Templating and ITOI obtain the published grammar from the registry on their
+                            next use, with no rebuild or redeployment.
+                        </p>
+                        <t t-if="dsl_versions and len(dsl_versions) > 1">
+                            <hr class="my-3"/>
+                            <p class="text-muted small text-uppercase fw-semibold mb-2">Version history</p>
+                            <ul class="list-group list-group-flush mb-0">
+                                <li t-foreach="dsl_versions" t-as="v"
+                                    class="list-group-item d-flex align-items-center justify-content-between px-0 py-1">
+                                    <span>
+                                        <t t-if="v.id == dsl.id">
+                                            <t t-out="v.acronym"/> <t t-out="v.version"/>
+                                            <span class="text-muted small">(this version)</span>
+                                        </t>
+                                        <a t-else="" t-attf-href="/dsl/#{v.id}">
+                                            <t t-out="v.acronym"/> <t t-out="v.version"/>
+                                        </a>
+                                    </span>
+                                    <span t-attf-class="badge text-capitalize bg-#{status_badges.get(v.status, 'secondary')}">
+                                        <t t-out="v.status"/>
+                                    </span>
+                                </li>
+                            </ul>
+                        </t>
+                    </div>
+                </div>
+
+                <!-- Metadata -->
+                <div class="card border-0 shadow-sm rounded-3 mb-4">
+                    <div class="card-body">
+                        <p class="text-muted small text-uppercase fw-semibold mb-3">Details</p>
+                        <form t-attf-action="/dsl/#{dsl.id}" method="post">
+                            <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                            <div class="row g-3">
+                                <div class="col-md-8">
+                                    <label class="form-label" for="e_name">Name</label>
+                                    <input type="text" class="form-control" name="name" id="e_name" required="required"
+                                           t-att-value="form.get('name') if form else dsl.name"/>
+                                    <div t-if="error.get('name')" class="text-danger small mt-1"><t t-out="error['name']"/></div>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label" for="e_acronym">Acronym</label>
+                                    <input type="text" class="form-control" name="acronym" id="e_acronym" required="required"
+                                           t-att-value="form.get('acronym') if form else dsl.acronym"/>
+                                    <div t-if="error.get('acronym')" class="text-danger small mt-1"><t t-out="error['acronym']"/></div>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label" for="e_version">Version</label>
+                                    <input type="text" class="form-control" name="version" id="e_version"
+                                           t-att-value="form.get('version') if form else dsl.version"/>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label" for="e_status">Status</label>
+                                    <span class="form-control-plaintext text-info">
+                                        <t t-out="dict(dsl._fields['status'].selection).get(form.get('status') if form else dsl.status)"/>
+                                    </span>
+                                    <input type="hidden" name="status"
+                                           t-att-value="form.get('status') if form else dsl.status"/>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label" for="e_ext">File extensions</label>
+                                    <input type="text" class="form-control" name="file_extensions" id="e_ext"
+                                           placeholder=".ext1,.ext2"
+                                           t-att-value="form.get('file_extensions') if form else (dsl.file_extensions or '')"/>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label" for="e_doc_url">Documentation URL</label>
+                                    <input type="url" class="form-control" name="documentation_url" id="e_doc_url"
+                                           t-att-value="form.get('documentation_url') if form else (dsl.documentation_url or '')"/>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label" for="e_desc">Description</label>
+                                    <textarea class="form-control" name="description" id="e_desc" rows="3"><t t-out="form.get('description') if form else (dsl.description or '')"/></textarea>
+                                </div>
+                            </div>
+                            <div class="d-flex gap-2 mt-3">
+                                <button type="submit" class="btn btn-primary">Save</button>
+                                <a href="/dsl" class="btn btn-outline-secondary">Cancel</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Maintainers (admin only) -->
+                <div t-if="can_manage_dsls" class="card border-0 shadow-sm rounded-3 mb-4">
+                    <div class="card-body">
+                        <p class="text-muted small text-uppercase fw-semibold mb-1">Maintainers</p>
+                        <p class="text-muted small mb-3">Maintainers are the users that you allow to manage the DSL.</p>
+                        <t t-if="maintainers">
+                            <ul class="list-group list-group-flush mb-3">
+                                <li t-foreach="maintainers" t-as="m"
+                                    class="list-group-item d-flex align-items-center justify-content-between px-0">
+                                    <span>
+                                        <i class="fa fa-user-o me-2 text-muted"/>
+                                        <t t-out="m.name"/>
+                                        <span class="text-muted ms-2 small"><t t-out="m.login"/></span>
+                                    </span>
+                                    <form t-attf-action="/dsl/#{dsl.id}/maintainers/#{m.id}/remove" method="post" class="d-inline">
+                                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                        <button type="submit" class="btn btn-sm btn-link text-danger p-1" title="Remove maintainer"
+                                                onclick="return confirm('Remove this maintainer?');">
+                                            <i class="fa fa-times fa-lg"/>
+                                        </button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </t>
+                        <t t-if="not maintainers">
+                            <p class="text-muted fst-italic mb-3">No maintainers yet. Until you add one, no org/workspace document can be attached to this DSL.</p>
+                        </t>
+                        <form t-attf-action="/dsl/#{dsl.id}/maintainers/add" method="post"
+                              class="d-flex flex-wrap align-items-center gap-2">
+                            <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                            <input type="email" class="form-control form-control-sm" style="max-width: 360px;"
+                                   name="email" placeholder="user@example.com" required="required"/>
+                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                <i class="fa fa-user-plus me-1"/>Add maintainer
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Definition files -->
+                <t t-set="file_groups" t-value="[
+                    {'type': 'grammar', 'label': 'Grammar', 'accept': '.langium', 'single': False, 'hint': 'A .langium workspace with one entry file and optional imported files.'},
+                    {'type': 'services', 'label': 'Services', 'accept': '.ts', 'single': False, 'hint': 'Optional TypeScript module with custom scoping, naming and validation.'},
+                    {'type': 'validation', 'label': 'Validation Rules', 'accept': '', 'single': False, 'hint': 'Multiple files are concatenated for the knowledge base.'},
+                    {'type': 'examples', 'label': 'Examples', 'accept': '', 'single': False, 'hint': 'Multiple files are concatenated for the knowledge base.'},
+                    {'type': 'specification', 'label': 'Specifications', 'accept': '', 'single': False, 'hint': 'Each file is synced individually.'},
+                ]"/>
+                <div class="card border-0 shadow-sm rounded-3">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center justify-content-between mb-3">
+                            <p class="text-muted small text-uppercase fw-semibold mb-0">Definition files</p>
+                            <a t-attf-href="/dsl/#{dsl.id}/download"
+                               class="btn btn-sm btn-outline-secondary">
+                                <i class="fa fa-download me-1"/>Download all
+                            </a>
+                        </div>
+                        <t t-foreach="file_groups" t-as="grp">
+                            <t t-set="grp_files" t-value="dsl.file_ids.filtered(lambda f: f.file_type == grp['type'])"/>
+                            <t t-set="structural" t-value="grp['type'] in ('grammar', 'services')"/>
+                            <t t-set="entry_file" t-value="grp_files.filtered(lambda f: f.is_entry) if structural else False"/>
+                            <div class="mb-4">
+                                <div class="d-flex align-items-center justify-content-between">
+                                    <div>
+                                        <h6 class="mb-1 d-inline-block"><t t-out="grp['label']"/></h6>
+                                        <span t-if="structural and dsl.status != 'draft'"
+                                              class="badge bg-secondary ms-2">Read-only</span>
+                                        <small t-if="structural and grp_files"
+                                               class="text-muted ms-2">
+                                            <t t-out="len(grp_files)"/>
+                                            <t t-out="'file' if len(grp_files) == 1 else 'files'"/>
+                                            <t t-if="entry_file"> · Entry: <code t-out="entry_file.relative_path"/></t>
+                                        </small>
+                                    </div>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <a t-if="structural and grp_files"
+                                           t-attf-href="/dsl/#{dsl.id}/grammar"
+                                           class="btn btn-sm btn-primary">
+                                            <i class="fa fa-pencil me-1"/>Open editor
+                                        </a>
+                                        <a t-if="structural and not grp_files and can_edit_grammar"
+                                           t-attf-href="/dsl/#{dsl.id}/grammar"
+                                           class="btn btn-sm btn-primary">
+                                            <i class="fa fa-plus me-1"/><t t-out="'Create grammar' if grp['type'] == 'grammar' else 'Add services'"/>
+                                        </a>
+                                        <small class="text-muted"><t t-out="grp['hint']"/></small>
+                                    </div>
+                                </div>
+                                <t t-if="grp_files">
+                                    <ul class="list-group list-group-flush mb-2">
+                                        <li t-foreach="grp_files" t-as="f"
+                                            class="list-group-item d-flex align-items-center justify-content-between px-0">
+                                            <span>
+                                                <i class="fa fa-file-o me-2 text-muted"/>
+                                                <a t-attf-href="/dsl/#{dsl.id}/files/#{f.id}/download">
+                                                    <t t-out="f.relative_path if structural else f.file_name"/>
+                                                </a>
+                                                <span t-if="structural and f.is_entry"
+                                                      class="badge bg-primary ms-2">Entry</span>
+                                                <span t-if="not f.is_enabled" class="badge bg-warning text-dark ms-2">Disabled</span>
+                                            </span>
+                                            <span class="text-nowrap">
+                                                <form t-if="not structural"
+                                                      t-attf-action="/dsl/#{dsl.id}/files/#{f.id}/toggle" method="post" class="d-inline">
+                                                    <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                                    <button type="submit" class="btn btn-sm btn-link p-1"
+                                                            t-att-title="'Disable' if f.is_enabled else 'Enable'">
+                                                        <i t-attf-class="fa #{'fa-toggle-on text-success' if f.is_enabled else 'fa-toggle-off text-muted'} fa-lg"/>
+                                                    </button>
+                                                </form>
+                                                <form t-if="not structural"
+                                                      t-attf-action="/dsl/#{dsl.id}/files/#{f.id}/delete" method="post" class="d-inline">
+                                                    <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                                    <button type="submit" class="btn btn-sm btn-link text-danger p-1" title="Delete file"
+                                                            onclick="return confirm('Delete this file?');">
+                                                        <i class="fa fa-trash fa-lg"/>
+                                                    </button>
+                                                </form>
+                                            </span>
+                                        </li>
+                                    </ul>
+                                </t>
+                                <t t-if="not (grp['single'] and grp_files) and (not structural or can_edit_grammar)">
+                                    <form t-attf-action="/dsl/#{dsl.id}/files/add" method="post"
+                                          enctype="multipart/form-data" class="d-flex flex-wrap align-items-center gap-2">
+                                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                        <input type="hidden" name="file_type" t-att-value="grp['type']"/>
+                                        <input type="file" class="form-control form-control-sm" style="max-width: 360px;"
+                                               name="file" t-att-accept="grp['accept'] or None" multiple="multiple" required="required"/>
+                                        <button type="submit" class="btn btn-sm btn-outline-primary">
+                                            <i class="fa fa-upload me-1"/>Upload
+                                        </button>
+                                    </form>
+                                </t>
+                                <t t-if="structural and grp_files and can_edit_grammar">
+                                    <small class="text-muted">Manage paths, entry selection and imported files in the Grammar Editor.</small>
+                                </t>
+                            </div>
+                        </t>
+                    </div>
+                </div>
+            </div>
+        </t>
+    </template>
+
+</odoo>

@@ -4,5 +4,5 @@ db_password = your_db_password
 db_host = localhost
 db_port = 5432
 admin_passwd = change_me
-; Absolute path to the custom-addons folder of this skeleton checkout.
-addons_path = /absolute/path/to/itlingoodoo/custom-addons
+; Use the absolute path to custom-addons in this repository.
+addons_path = /absolute/path/to/itlingocloud/custom-addons

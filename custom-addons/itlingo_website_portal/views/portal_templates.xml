@@ -1,0 +1,629 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Shared date formatting: user locale when logged in, DD-MM-YYYY
+         fallback for anonymous visitors. Call with `date_value` set. -->
+    <template id="portal_date" name="Portal formatted date">
+        <t t-if="date_value">
+            <t t-if="request.env.user._is_public()">
+                <t t-out="date_value.strftime('%d-%m-%Y')"/>
+            </t>
+            <t t-else="">
+                <t t-out="date_value" t-options='{"widget": "date"}'/>
+            </t>
+        </t>
+        <t t-else="">—</t>
+    </template>
+
+    <!-- Shared sortable column header (3-click cycle: asc / desc / none).
+         Call inside a <th> with `sort_key` and `sort_label` set. Expects
+         `sortby`, `sortdir`, `sort_base_url` and `sort_qs` (pre-encoded query
+         string of the other filters) in the rendering context. -->
+    <template id="portal_sort_th" name="Sortable column header">
+        <t t-set="s_active" t-value="sortby == sort_key"/>
+        <t t-set="s_next" t-value="'asc' if not s_active else ('desc' if sortdir == 'asc' else None)"/>
+        <t t-set="s_parts" t-value="([sort_qs] if sort_qs else []) + (['sortby=' + sort_key, 'sortdir=' + s_next] if s_next else [])"/>
+        <t t-set="s_href" t-value="(sort_base_url or '') + ('?' + '&amp;'.join(s_parts) if s_parts else '')"/>
+        <a t-att-href="s_href" class="text-reset text-decoration-none d-inline-flex align-items-center gap-1"
+           t-att-title="'Sort ' + ('ascending' if s_next == 'asc' else 'descending' if s_next == 'desc' else 'off')">
+            <t t-out="sort_label"/>
+            <i t-if="s_active and sortdir == 'asc'" class="fa fa-caret-up" aria-hidden="true"/>
+            <i t-elif="s_active and sortdir == 'desc'" class="fa fa-caret-down" aria-hidden="true"/>
+            <i t-else="" class="fa fa-sort text-muted opacity-50" aria-hidden="true"/>
+        </a>
+    </template>
+
+    <!-- Shared workspace business-status badge with semantic colors, so the
+         state reads the same on every list and detail page. Call with
+         `ws_status_project` (an itlingo.workspace record) set. -->
+    <template id="portal_ws_status_badge" name="Workspace status badge">
+        <t t-set="ws_bs" t-value="ws_status_project.business_status or 'not_started'"/>
+        <span t-attf-class="badge #{'bg-info text-dark' if ws_bs == 'executing'
+                                    else 'bg-success' if ws_bs == 'concluded'
+                                    else 'bg-danger' if ws_bs == 'canceled'
+                                    else 'bg-light text-dark border'}">
+            <t t-out="dict(ws_status_project._fields['business_status'].selection).get(ws_bs)"/>
+        </span>
+    </template>
+
+    <!-- Multi-select filter dropdown: a Bootstrap dropdown holding checkboxes,
+         so it submits like plain checkboxes in the surrounding GET form.
+         Expects:
+           ms_id      unique id prefix for the checkbox inputs
+           ms_label   group label shown above the button
+           ms_options list of {name, value, label, checked} -->
+    <template id="portal_filter_multiselect" name="Filter multi-select">
+        <t t-set="ms_selected" t-value="[o['label'] for o in ms_options if o.get('checked')]"/>
+        <span class="form-label small text-muted d-block mb-1"><t t-out="ms_label"/></span>
+        <div class="dropdown">
+            <button class="btn btn-light border dropdown-toggle w-100 text-start d-flex align-items-center"
+                    type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                    aria-expanded="false">
+                <span class="text-truncate flex-grow-1">
+                    <t t-if="not ms_selected">All</t>
+                    <t t-elif="len(ms_selected) &lt;= 2" t-out="', '.join(ms_selected)"/>
+                    <t t-else="" t-out="'%s selected' % len(ms_selected)"/>
+                </span>
+            </button>
+            <div class="dropdown-menu w-100 px-3 py-2" style="min-width: 12rem;">
+                <div t-foreach="ms_options" t-as="opt" class="form-check">
+                    <input class="form-check-input" type="checkbox"
+                           t-att-name="opt['name']" t-att-value="opt['value']"
+                           t-attf-id="#{ms_id}_#{opt_index}"
+                           t-att-checked="'1' if opt.get('checked') else None"/>
+                    <label class="form-check-label d-block" t-attf-for="#{ms_id}_#{opt_index}">
+                        <t t-out="opt['label']"/>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Shared list pager footer, used below every paginated table. Expects
+         `pager` (the dict built by controllers.portal.paginate) in the
+         rendering context. Always shows the "Showing X-Y of Z" summary when
+         there are results; the page controls (core portal.pager) appear only
+         when there is more than one page. -->
+    <template id="portal_list_pager" name="Shared list pager">
+        <div t-if="pager" class="o_portal_pager text-center mt-3">
+            <p t-if="pager.get('total')" class="text-muted small mb-1">
+                Showing <t t-out="pager['range_start']"/>&#8211;<t t-out="pager['range_end']"/>
+                of <t t-out="pager['total']"/>
+            </p>
+            <t t-call="portal.pager"/>
+        </div>
+    </template>
+
+    <!-- Shared documents list: filter bar + sortable table, used by every
+         document list in the portal (workspace, public workspace, org) so
+         the columns stay consistent. Expects the _portal_documents_list_ctx
+         context plus `sort_base_url` and `doc_link_base` (prefix of the
+         document detail links). -->
+    <template id="portal_documents_list" name="Shared documents list">
+        <div class="card itlingo-portal-filter-card shadow-sm border-0 rounded-3 mb-4">
+            <div class="card-body">
+                <p class="text-muted small text-uppercase fw-semibold mb-3">Document filters</p>
+                <form method="get" t-att-action="sort_base_url" class="row g-3 align-items-end">
+                    <div class="col-md-4 col-lg-3">
+                        <label class="form-label small text-muted mb-1" for="doc_filter_name">Name</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0"><i class="fa fa-search text-muted"/></span>
+                            <input type="search" class="form-control border-start-0 bg-light" id="doc_filter_name"
+                                   name="name" t-att-value="doc_filters.get('name') or ''" placeholder="Name"/>
+                        </div>
+                    </div>
+                    <div class="col-md-4 col-lg-2">
+                        <t t-call="itlingo_website_portal.portal_filter_multiselect">
+                            <t t-set="ms_id" t-value="'doc_filter_type'"/>
+                            <t t-set="ms_label">Type</t>
+                            <t t-set="ms_options" t-value="[
+                                {'name': 'type_id', 'value': dt.id, 'label': dt.name,
+                                 'checked': dt.id in (doc_filters.get('type_id') or [])}
+                                for dt in doc_types]"/>
+                        </t>
+                    </div>
+                    <div class="col-md-4 col-lg-2">
+                        <t t-call="itlingo_website_portal.portal_filter_multiselect">
+                            <t t-set="ms_id" t-value="'doc_filter_dsl_family'"/>
+                            <t t-set="ms_label">DSL family</t>
+                            <t t-set="ms_options" t-value="[
+                                {'name': 'no_dsl', 'value': '1', 'label': 'No DSL',
+                                 'checked': doc_filters.get('no_dsl')},
+                            ] + [
+                                {'name': 'dsl_family_id', 'value': family.id,
+                                 'label': '%s - %s' % (family.acronym, family.name),
+                                 'checked': family.id in (doc_filters.get('dsl_family_id') or [])}
+                                for family in dsl_families]"/>
+                        </t>
+                    </div>
+                    <div class="col-md-4 col-lg-2">
+                        <t t-call="itlingo_website_portal.portal_filter_multiselect">
+                            <t t-set="ms_id" t-value="'doc_filter_lang'"/>
+                            <t t-set="ms_label">Language</t>
+                            <t t-set="ms_options" t-value="[
+                                {'name': 'language', 'value': opt[0], 'label': opt[1],
+                                 'checked': opt[0] in (doc_filters.get('language') or [])}
+                                for opt in doc_language_selection]"/>
+                        </t>
+                    </div>
+                    <div class="col-md-4 col-lg-2">
+                        <t t-call="itlingo_website_portal.portal_filter_multiselect">
+                            <t t-set="ms_id" t-value="'doc_filter_format'"/>
+                            <t t-set="ms_label">Format</t>
+                            <t t-set="ms_options" t-value="[
+                                {'name': 'format', 'value': opt[0], 'label': opt[1],
+                                 'checked': opt[0] in (doc_filters.get('format') or [])}
+                                for opt in doc_format_selection]"/>
+                        </t>
+                    </div>
+                    <div class="col-md-4 col-lg-2">
+                        <t t-call="itlingo_website_portal.portal_filter_multiselect">
+                            <t t-set="ms_id" t-value="'doc_filter_status'"/>
+                            <t t-set="ms_label">Status</t>
+                            <t t-set="ms_options" t-value="[
+                                {'name': 'status', 'value': opt[0], 'label': opt[1],
+                                 'checked': opt[0] in (doc_filters.get('status') or [])}
+                                for opt in doc_status_selection]"/>
+                        </t>
+                    </div>
+                    <div class="col-12 d-flex flex-wrap gap-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fa fa-search me-1"/>Filter
+                        </button>
+                        <a t-att-href="sort_base_url" class="btn btn-outline-secondary">Clear filters</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <t t-if="not documents">
+            <p class="text-muted">No documents match your filters, or there are no documents here yet.</p>
+        </t>
+        <div t-if="documents" class="card border-0 shadow-sm rounded-3">
+            <div class="card-header bg-white border-0 p-3">
+                <h5 class="fw-semibold mb-0">Documents (<t t-out="'%d' % (doc_count or 0)"/>)</h5>
+            </div>
+            <div class="card-body p-0 table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>
+                                <t t-call="itlingo_website_portal.portal_sort_th">
+                                    <t t-set="sort_key" t-value="'name'"/>
+                                    <t t-set="sort_label">Name</t>
+                                </t>
+                            </th>
+                            <th>
+                                <t t-call="itlingo_website_portal.portal_sort_th">
+                                    <t t-set="sort_key" t-value="'type'"/>
+                                    <t t-set="sort_label">Type</t>
+                                </t>
+                            </th>
+                            <th>
+                                <t t-call="itlingo_website_portal.portal_sort_th">
+                                    <t t-set="sort_key" t-value="'dsl'"/>
+                                    <t t-set="sort_label">DSL</t>
+                                </t>
+                            </th>
+                            <th>
+                                <t t-call="itlingo_website_portal.portal_sort_th">
+                                    <t t-set="sort_key" t-value="'language'"/>
+                                    <t t-set="sort_label">Language</t>
+                                </t>
+                            </th>
+                            <th>
+                                <t t-call="itlingo_website_portal.portal_sort_th">
+                                    <t t-set="sort_key" t-value="'format'"/>
+                                    <t t-set="sort_label">Format</t>
+                                </t>
+                            </th>
+                            <th>
+                                <t t-call="itlingo_website_portal.portal_sort_th">
+                                    <t t-set="sort_key" t-value="'create_date'"/>
+                                    <t t-set="sort_label">Create Date</t>
+                                </t>
+                            </th>
+                            <th>
+                                <t t-call="itlingo_website_portal.portal_sort_th">
+                                    <t t-set="sort_key" t-value="'write_date'"/>
+                                    <t t-set="sort_label">Last Modified</t>
+                                </t>
+                            </th>
+                            <th>
+                                <t t-call="itlingo_website_portal.portal_sort_th">
+                                    <t t-set="sort_key" t-value="'status'"/>
+                                    <t t-set="sort_label">Status</t>
+                                </t>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr t-foreach="documents" t-as="doc">
+                            <td>
+                                <a t-attf-href="#{doc_link_base}/#{doc.id}">
+                                    <t t-out="doc.name"/>
+                                </a>
+                            </td>
+                            <td><t t-out="doc.document_type_id.name or '—'"/></td>
+                            <td>
+                                <t t-if="doc.dsl_family_id">
+                                    <t t-out="doc.dsl_family_id.acronym"/>
+                                    <t t-if="doc.dsl_version_id">
+                                        (<t t-out="doc.dsl_version_id.version"/> -
+                                        <t t-out="dict(doc.dsl_version_id._fields['status'].selection).get(doc.dsl_version_id.status)"/>)
+                                    </t>
+                                </t>
+                                <t t-else="">—</t>
+                            </td>
+                            <td>
+                                <t t-if="doc.language" t-out="dict(doc._fields['language'].selection).get(doc.language)"/>
+                                <t t-else="">—</t>
+                            </td>
+                            <td>
+                                <t t-if="doc.document_format" t-out="dict(doc._fields['document_format'].selection).get(doc.document_format)"/>
+                                <t t-else="">—</t>
+                            </td>
+                            <td>
+                                <t t-call="itlingo_website_portal.portal_date">
+                                    <t t-set="date_value" t-value="doc.creation_date"/>
+                                </t>
+                            </td>
+                            <td>
+                                <t t-call="itlingo_website_portal.portal_date">
+                                    <t t-set="date_value" t-value="doc.write_date"/>
+                                </t>
+                            </td>
+                            <td>
+                                <span class="badge bg-secondary">
+                                    <t t-out="dict(doc._fields['status'].selection).get(doc.status)"/>
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <t t-call="itlingo_website_portal.portal_list_pager"/>
+    </template>
+
+    <!-- "My Account" must open real account management. The stock link goes
+         to /my/home, which this platform redirects to the homepage; point it
+         to /my/account instead and add a Security entry (password / 2FA). -->
+    <template id="user_dropdown_account" name="User dropdown: account management"
+              inherit_id="portal.my_account_link">
+        <xpath expr="//a[@href='/my/home']" position="replace">
+            <a href="/my/account" role="menuitem" class="dropdown-item ps-3">
+                <i class="fa fa-fw fa-id-card-o me-1 small text-primary-emphasis"/> My Account
+            </a>
+            <a href="/my/security" role="menuitem" class="dropdown-item ps-3">
+                <i class="fa fa-fw fa-lock me-1 small text-primary-emphasis"/> Security
+            </a>
+        </xpath>
+    </template>
+
+    <!-- Invitations and role lookups are email-centric, so the account email
+         must not be editable from the portal (see also the server-side guard
+         in controllers/portal.py). Only applies to the user's own record;
+         extra contact addresses keep an editable email.
+         Also: this platform has no invoicing/shipping, so only Name (and the
+         read-only email) is mandatory — mark every other label optional; the
+         matching server-side rule is the _get_mandatory_*_fields override. -->
+    <template id="address_form_email_readonly" name="Account form: read-only email, minimal required fields"
+              inherit_id="portal.address_form_fields">
+        <xpath expr="//input[@id='o_email']" position="attributes">
+            <attribute name="t-att-readonly">'1' if partner_sudo and partner_sudo == request.env.user.partner_id else None</attribute>
+        </xpath>
+        <xpath expr="//div[@id='div_email']" position="inside">
+            <small t-if="partner_sudo and partner_sudo == request.env.user.partner_id"
+                   class="form-text text-muted">
+                Your email identifies your account and invitations, so it cannot be changed here.
+            </small>
+        </xpath>
+        <xpath expr="//label[@for='o_phone']" position="attributes">
+            <attribute name="class" add="label-optional" separator=" "/>
+        </xpath>
+        <xpath expr="//label[@for='o_street']" position="attributes">
+            <attribute name="class" add="label-optional" separator=" "/>
+        </xpath>
+        <xpath expr="(//label[@for='o_zip'])[1]" position="attributes">
+            <attribute name="class" add="label-optional" separator=" "/>
+        </xpath>
+        <xpath expr="(//label[@for='o_zip'])[2]" position="attributes">
+            <attribute name="class" add="label-optional" separator=" "/>
+        </xpath>
+        <xpath expr="//label[@for='o_city']" position="attributes">
+            <attribute name="class" add="label-optional" separator=" "/>
+        </xpath>
+        <xpath expr="//label[@for='o_country_id']" position="attributes">
+            <attribute name="class" add="label-optional" separator=" "/>
+        </xpath>
+    </template>
+
+    <!-- /my/account should only show Your Name, Email and Country.
+         `portal.portal_my_details` is only ever rendered for the user's own
+         record (extra contact addresses use `portal.address_management` and
+         keep the full form), so a scoping class + CSS hides the extra fields.
+         The page's JS (portal address interaction) assumes all inputs exist
+         in the DOM (phone placeholder, street/zip/city toggling), so the
+         fields are hidden, not removed — their unchanged values are still
+         submitted and no data is wiped. -->
+    <template id="portal_my_details_minimal" name="Account page: only name, email, country"
+              inherit_id="portal.portal_my_details">
+        <!-- The stock template hides the site footer (eCommerce checkout
+             pattern); every other portal page shows it, so keep it here too. -->
+        <xpath expr="//t[@t-set='no_footer']" position="replace"/>
+        <xpath expr="//div[@name='address_details']" position="attributes">
+            <attribute name="class" add="itlingo-account-minimal" separator=" "/>
+        </xpath>
+        <!-- Same header style as the Security page: plain title, no
+             breadcrumb bar. -->
+        <xpath expr="//t[@t-set='additional_title']" position="replace">
+            <t t-set="additional_title">My account</t>
+            <t t-set="no_breadcrumbs" t-value="1"/>
+        </xpath>
+        <xpath expr="//div[hasclass('o_customer_address_fill')]" position="before">
+            <h3 class="mt-3 mb-0">My account</h3>
+            <hr class="mt-2 mb-3"/>
+        </xpath>
+    </template>
+
+    <!-- The account form is not an "address" on this platform: plain
+         left-aligned "Save" + "Cancel" like every other portal form, instead
+         of the stock checkout-style Discard/Save split with chevrons. -->
+    <template id="address_footer_save_label" name="Address footer: Save/Cancel buttons"
+              inherit_id="portal.address_footer">
+        <xpath expr="//div[hasclass('d-flex')]" position="replace">
+            <div class="d-flex gap-2 mt32 mb32">
+                <button id="save_address" class="btn btn-primary">
+                    <t name="save_address_label">Save</t>
+                </button>
+                <a role="button" t-att-href="discard_url or '/my/'"
+                   class="btn btn-outline-secondary">Cancel</a>
+            </div>
+        </xpath>
+    </template>
+
+    <!-- Security page: keep only "Change Password" (and account deletion).
+         2FA and Passkeys are removed by deactivating the stock hook views;
+         "Revoke All Sessions" is removed below. -->
+    <record id="auth_totp_portal.totp_portal_hook" model="ir.ui.view">
+        <field name="active" eval="False"/>
+    </record>
+    <record id="auth_passkey_portal.passkeys_portal_hook" model="ir.ui.view">
+        <field name="active" eval="False"/>
+    </record>
+    <template id="portal_my_security_minimal" name="Security page: password change only"
+              inherit_id="portal.portal_my_security" priority="99">
+        <!-- The stock t-set sits inside the body div where it never reaches
+             the layout's <title>, so the tab showed the raw template name.
+             Set it as a direct child of the t-call instead. -->
+        <xpath expr="//div[hasclass('o_portal_security_body')]" position="before">
+            <t t-set="additional_title">Security</t>
+        </xpath>
+        <xpath expr="//section[@name='portal_revoke_all_devices_popup']" position="replace"/>
+        <!-- Users must not be able to deactivate their own account. -->
+        <xpath expr="//section[@name='portal_deactivate_account']" position="replace"/>
+        <!-- Plain "Security" title, no back button; the "Change Password"
+             section heading acts as the subtitle. -->
+        <xpath expr="//a[@href='/my/']/.." position="replace">
+            <h3 class="mt-3 mb-0">Security</h3>
+            <hr class="mt-2 mb-3"/>
+        </xpath>
+        <!-- Primary action styled like every other form; labels without the
+             stock colon suffix. -->
+        <xpath expr="//form[hasclass('oe_reset_password_form')]//button[@type='submit']" position="attributes">
+            <attribute name="class">btn btn-primary</attribute>
+        </xpath>
+        <xpath expr="//label[@for='current']" position="replace">
+            <label for="current">Password</label>
+        </xpath>
+        <xpath expr="//label[@for='new']" position="replace">
+            <label for="new">New Password</label>
+        </xpath>
+        <xpath expr="//label[@for='new2']" position="replace">
+            <label for="new2">Verify New Password</label>
+        </xpath>
+    </template>
+
+    <!-- Breadcrumb entries -->
+    <template id="portal_layout" name="Portal layout: ITLingo menu entries"
+              inherit_id="portal.portal_breadcrumbs" priority="50">
+        <xpath expr="//ol[hasclass('o_portal_submenu')]" position="inside">
+            <li t-if="page_name == 'organizations'" class="breadcrumb-item active">
+                Organizations
+            </li>
+            <li t-if="page_name == 'organization_new'" class="breadcrumb-item">
+                <a href="/my/organizations">Organizations</a>
+            </li>
+            <li t-if="page_name == 'organization_new'" class="breadcrumb-item active">
+                New
+            </li>
+            <li t-if="organization_hub" class="breadcrumb-item">
+                <a href="/my/organizations">Organizations</a>
+            </li>
+            <li t-if="organization_hub and page_name == 'organization_stats'" class="breadcrumb-item active text-truncate">
+                <t t-out="organization.name"/>
+            </li>
+            <li t-if="organization_hub and page_name != 'organization_stats'" class="breadcrumb-item text-truncate">
+                <a t-attf-href="/my/organizations/#{organization.id}"><t t-out="organization.name"/></a>
+            </li>
+            <li t-if="page_name == 'organization_workspaces'" class="breadcrumb-item active">Workspaces</li>
+            <li t-if="page_name == 'organization_documentation'" class="breadcrumb-item active">Documents</li>
+            <li t-if="page_name == 'organization_documentation_new'" class="breadcrumb-item">
+                <a t-attf-href="/my/organizations/#{organization.id}/documents">Documents</a>
+            </li>
+            <li t-if="page_name == 'organization_documentation_new'" class="breadcrumb-item active">New document</li>
+            <li t-if="page_name in ('organization_document_detail', 'organization_document_edit')" class="breadcrumb-item">
+                <a t-attf-href="/my/organizations/#{organization.id}/documents">Documents</a>
+            </li>
+            <li t-if="page_name == 'organization_document_detail'" class="breadcrumb-item active text-truncate">
+                <t t-out="document.name"/>
+            </li>
+            <li t-if="page_name == 'organization_document_edit'" class="breadcrumb-item text-truncate">
+                <a t-attf-href="/my/organizations/#{organization.id}/documents/#{document.id}"><t t-out="document.name"/></a>
+            </li>
+            <li t-if="page_name == 'organization_document_edit'" class="breadcrumb-item active">Edit</li>
+            <li t-if="page_name == 'organization_users'" class="breadcrumb-item active">Users</li>
+            <li t-if="page_name == 'organization_llm'" class="breadcrumb-item active">LLM Settings</li>
+            <li t-if="page_name == 'organization_settings'" class="breadcrumb-item active">Settings</li>
+            <li t-if="page_name == 'workspaces'" class="breadcrumb-item active">
+                Workspaces
+            </li>
+            <li t-if="page_name == 'public_workspaces'" class="breadcrumb-item active">
+                Public workspaces
+            </li>
+            <li t-if="page_name == 'public_workspace_detail'" class="breadcrumb-item">
+                <a href="/public-workspaces">Public workspaces</a>
+            </li>
+            <li t-if="page_name == 'public_workspace_detail'" class="breadcrumb-item active text-truncate">
+                <t t-out="project.name"/>
+            </li>
+            <li t-if="page_name == 'public_workspace_documentation'" class="breadcrumb-item">
+                <a href="/public-workspaces">Public workspaces</a>
+            </li>
+            <li t-if="page_name == 'public_workspace_documentation'" class="breadcrumb-item">
+                <a t-attf-href="/public-workspaces/#{project.id}"><t t-out="project.name"/></a>
+            </li>
+            <li t-if="page_name == 'public_workspace_documentation'" class="breadcrumb-item active">
+                Documents
+            </li>
+            <li t-if="page_name == 'public_workspace_specifications'" class="breadcrumb-item">
+                <a href="/public-workspaces">Public workspaces</a>
+            </li>
+            <li t-if="page_name == 'public_workspace_specifications'" class="breadcrumb-item">
+                <a t-attf-href="/public-workspaces/#{project.id}"><t t-out="project.name"/></a>
+            </li>
+            <li t-if="page_name == 'public_workspace_specifications'" class="breadcrumb-item active">
+                Specifications
+            </li>
+            <li t-if="page_name == 'public_workspace_document'" class="breadcrumb-item">
+                <a href="/public-workspaces">Public workspaces</a>
+            </li>
+            <li t-if="page_name == 'public_workspace_document'" class="breadcrumb-item">
+                <a t-attf-href="/public-workspaces/#{project.id}"><t t-out="project.name"/></a>
+            </li>
+            <li t-if="page_name == 'public_workspace_document'" class="breadcrumb-item">
+                <a t-attf-href="/public-workspaces/#{project.id}/documents">Documents</a>
+            </li>
+            <li t-if="page_name == 'public_workspace_document'" class="breadcrumb-item active text-truncate">
+                <t t-out="document.name"/>
+            </li>
+            <li t-if="page_name == 'workspace_new'" class="breadcrumb-item">
+                <a href="/my/workspaces">Workspaces</a>
+            </li>
+            <li t-if="page_name == 'workspace_new'" class="breadcrumb-item active">
+                New
+            </li>
+            <li t-if="page_name == 'workspace_detail'" class="breadcrumb-item">
+                <a href="/my/workspaces">Workspaces</a>
+            </li>
+            <li t-if="page_name == 'workspace_detail'" class="breadcrumb-item active text-truncate">
+                <t t-out="project.name"/>
+            </li>
+            <!-- Workspace hub sub-pages: Workspaces / <name> / <section> -->
+            <t t-set="ws_subpages"
+               t-value="['workspace_users', 'workspace_documentation', 'workspace_documentation_new', 'workspace_document_detail', 'workspace_document_edit', 'workspace_organization_document_detail', 'workspace_organization_document_edit', 'workspace_specifications', 'workspace_settings', 'workspace_leave_promote']"/>
+            <li t-if="page_name in ws_subpages" class="breadcrumb-item">
+                <a href="/my/workspaces">Workspaces</a>
+            </li>
+            <li t-if="page_name in ws_subpages" class="breadcrumb-item text-truncate">
+                <a t-attf-href="/my/workspaces/#{project.id}"><t t-out="project.name"/></a>
+            </li>
+            <li t-if="page_name == 'workspace_users'" class="breadcrumb-item active">Users</li>
+            <li t-if="page_name == 'workspace_leave_promote'" class="breadcrumb-item">
+                <a t-attf-href="/my/workspaces/#{project.id}/users">Users</a>
+            </li>
+            <li t-if="page_name == 'workspace_leave_promote'" class="breadcrumb-item active">Leave</li>
+            <li t-if="page_name == 'workspace_documentation'" class="breadcrumb-item active">Documents</li>
+            <li t-if="page_name == 'workspace_documentation_new'" class="breadcrumb-item">
+                <a t-attf-href="/my/workspaces/#{project.id}/documents">Documents</a>
+            </li>
+            <li t-if="page_name == 'workspace_documentation_new'" class="breadcrumb-item active">New document</li>
+            <li t-if="page_name in ('workspace_document_detail', 'workspace_document_edit', 'workspace_organization_document_detail', 'workspace_organization_document_edit')" class="breadcrumb-item">
+                <a t-attf-href="/my/workspaces/#{project.id}/documents">Documents</a>
+            </li>
+            <li t-if="page_name in ('workspace_document_detail', 'workspace_organization_document_detail')" class="breadcrumb-item active text-truncate">
+                <t t-out="document.name"/>
+            </li>
+            <li t-if="page_name in ('workspace_document_edit', 'workspace_organization_document_edit')" class="breadcrumb-item text-truncate">
+                <a t-att-href="doc_base_url + '/' + str(document.id)"><t t-out="document.name"/></a>
+            </li>
+            <li t-if="page_name in ('workspace_document_edit', 'workspace_organization_document_edit')" class="breadcrumb-item active">Edit</li>
+            <li t-if="page_name == 'workspace_specifications'" class="breadcrumb-item active">Specifications</li>
+            <li t-if="page_name == 'workspace_settings'" class="breadcrumb-item active">Settings</li>
+            <li t-if="page_name == 'notifications'" class="breadcrumb-item active">
+                Notifications
+            </li>
+            <li t-if="page_name == 'dsls'" class="breadcrumb-item active">
+                DSLs
+            </li>
+            <li t-if="page_name == 'dsl_new'" class="breadcrumb-item">
+                <a href="/dsl">DSLs</a>
+            </li>
+            <li t-if="page_name == 'dsl_new'" class="breadcrumb-item active">
+                New
+            </li>
+            <li t-if="page_name in ('dsl_edit', 'dsl_view', 'dsl_grammar_editor')" class="breadcrumb-item">
+                <a href="/dsl">DSLs</a>
+            </li>
+            <li t-if="page_name in ('dsl_edit', 'dsl_view')" class="breadcrumb-item active text-truncate">
+                <t t-out="dsl.acronym"/>
+            </li>
+            <li t-if="page_name == 'dsl_grammar_editor'" class="breadcrumb-item text-truncate">
+                <a t-attf-href="/dsl/#{dsl.id}"><t t-out="dsl.acronym"/></a>
+            </li>
+            <li t-if="page_name == 'dsl_grammar_editor'" class="breadcrumb-item active">
+                Grammar
+            </li>
+        </xpath>
+    </template>
+
+    <!-- The stock Odoo `project` module is still installed, and its portal
+         breadcrumb fires whenever a template variable named `project` is in
+         scope (regardless of its model). Our workspace pages pass an
+         itlingo.workspace record as `project`, so without this guard the stock
+         "Projects" crumb would show alongside our own "Workspaces" trail.
+         Suppress it on ITLingo workspace pages via `hide_project_breadcrumbs`. -->
+    <template id="suppress_project_breadcrumb"
+              name="Hide project breadcrumb on workspace pages"
+              inherit_id="project.portal_layout" priority="60">
+        <xpath expr="//li[@t-if=&quot;page_name == 'project' or project&quot;]" position="attributes">
+            <attribute name="t-if">(page_name == 'project' or project) and not hide_project_breadcrumbs</attribute>
+        </xpath>
+        <xpath expr="//li[@t-elif='project']" position="attributes">
+            <attribute name="t-elif">project and not hide_project_breadcrumbs</attribute>
+        </xpath>
+    </template>
+
+    <!-- Portal home cards -->
+    <template id="portal_my_home" name="ITLingo Portal Home"
+              customize_show="True" inherit_id="portal.portal_my_home" priority="50">
+        <xpath expr="//div[hasclass('o_portal_docs')]" position="before">
+            <t t-set="portal_service_category_enable" t-value="True"/>
+        </xpath>
+        <div id="portal_service_category" position="inside">
+            <t t-call="portal.portal_docs_entry">
+                <t t-set="icon" t-value="'/web/static/img/company.svg'"/>
+                <t t-set="title">Organizations</t>
+                <t t-set="url" t-value="'/my/organizations'"/>
+                <t t-set="text">View and manage your organizations</t>
+                <t t-set="placeholder_count" t-value="'organization_count'"/>
+            </t>
+            <t t-call="portal.portal_docs_entry">
+                <t t-set="icon" t-value="'/web/static/img/folder.svg'"/>
+                <t t-set="title">Workspaces</t>
+                <t t-set="url" t-value="'/my/workspaces'"/>
+                <t t-set="text">Access your project workspaces</t>
+                <t t-set="placeholder_count" t-value="'workspace_count'"/>
+            </t>
+            <t t-if="request.env.user.has_group('itlingo_organizations.group_itlingo_admin') or request.env.user.has_group('itlingo_dsl.group_itlingo_dsl_maintainer')"
+               t-call="portal.portal_docs_entry">
+                <t t-set="icon" t-value="'/web/static/img/folder.svg'"/>
+                <t t-set="title">DSLs</t>
+                <t t-set="url" t-value="'/dsl'"/>
+                <t t-set="text">Manage the domain-specific languages you maintain</t>
+                <t t-set="placeholder_count" t-value="'dsl_count'"/>
+            </t>
+        </div>
+    </template>
+
+</odoo>

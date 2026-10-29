@@ -1,5 +1,7 @@
 *
 !custom-addons
+custom-addons/**/.git
 custom-addons/**/__pycache__
-custom-addons/itlingo_dsl/services_compiler/node_modules
-custom-addons/itlingo_templating/parser/node_modules
+custom-addons/**/node_modules
+custom-addons/**/.env
+custom-addons/**/.env.*

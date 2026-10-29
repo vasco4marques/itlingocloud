@@ -3,13 +3,21 @@
 /odoo/*
 !/odoo/Makefile
 
-# --- Custom addons ---
-# Tracked: only the README. The addons live in their own repository.
-/custom-addons/*
-!/custom-addons/README.md
-
 # --- Local config ---
 config/odoo.config
+odoo.docker.conf
+config/odoo.local.conf
+.env.*
+!.env.example
+
+# Database exports and local backups
+*.sql
+*.sql.gz
+*.dump
+*.backup
+
+# JavaScript dependencies
+node_modules/
 
 # --- Project notes / scratch ---
 AGENTS.md

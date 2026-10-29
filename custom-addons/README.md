@@ -1,33 +1,17 @@
-# custom-addons
+# ITLingoCloud modules
 
-This folder must contain the **ITLingo Cloud custom Odoo modules** as its own
-git repository.
+These modules belong to the ITLingoCloud repository. No separate Git clone is required.
 
-It is intentionally empty in this skeleton — the modules live in a separate
-repository and are gitignored here.
+| Module | Purpose |
+| --- | --- |
+| `itlingo_organizations` | Organizations, membership, and roles |
+| `itlingo_workspace_access` | Workspaces and access rules |
+| `itlingo_documents` | Documents, libraries, and document types |
+| `itlingo_notifications` | Notifications and portal integration |
+| `itlingo_integration` | API access and ITOI integration |
+| `itlingo_website_portal` | The web portal and grammar editor |
+| `itlingo_dsl` | DSL definitions, versions, and language services |
+| `itlingo_chatbot_integration` | The connection to the separate ITLingo-Chatbot application |
+| `itlingo_templating` | Templates and document generation |
 
-## Expected layout
-
-After cloning, you should have:
-
-```
-custom-addons/
-  itlingo_documents/
-  itlingo_integration/
-  itlingo_notifications/
-  itlingo_organizations/
-  itlingo_website_portal/
-  itlingo_workspace_access/
-  ...
-```
-
-## Setup
-
-From the project root:
-
-```bash
-git clone <custom-addons-repo-url> custom-addons
-```
-
-The `addons_path` entry in `config/odoo.config` must point to the absolute
-path of this folder.
+See the root `README.md` for installation, configuration, and test commands. Each module declares its dependencies in `__manifest__.py`.
