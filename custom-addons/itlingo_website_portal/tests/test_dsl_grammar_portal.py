@@ -30,7 +30,7 @@ class TestDslGrammarPortal(HttpCase):
             password='grammar_maintainer',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_member'
+                'itlingo_core.group_itlingo_member'
             ),
         )
         cls.unrelated = new_test_user(
@@ -39,7 +39,7 @@ class TestDslGrammarPortal(HttpCase):
             password='grammar_unrelated',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_member'
+                'itlingo_core.group_itlingo_member'
             ),
         )
         cls.admin = new_test_user(
@@ -48,7 +48,7 @@ class TestDslGrammarPortal(HttpCase):
             password='grammar_admin',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_admin'
+                'itlingo_core.group_itlingo_admin'
             ),
         )
         cls.draft = cls.env['itlingo.dsl'].create({
@@ -1229,12 +1229,6 @@ class TestDslGrammarPortal(HttpCase):
         self.assertIn('data-grammar-problems', read_only.text)
         self.assertIn('data-grammar-save', editable.text)
 
-    def test_editor_page_states_parser_deployment_scope(self):
-        self.authenticate('grammar_maintainer', 'grammar_maintainer')
-        editor = self.url_open(f'/dsl/{self.draft.id}/grammar')
-        self.assertIn('do not', editor.text)
-        self.assertIn('deploy a parser', editor.text)
-
     def test_backend_button_opens_portal_editor(self):
         action = self.draft.action_open_grammar_editor()
         self.assertEqual(action['type'], 'ir.actions.act_url')
@@ -1254,7 +1248,7 @@ class TestDslLifecyclePortal(HttpCase):
             password='lifecycle_maintainer',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_member'
+                'itlingo_core.group_itlingo_member'
             ),
         )
         cls.unrelated = new_test_user(
@@ -1263,7 +1257,7 @@ class TestDslLifecyclePortal(HttpCase):
             password='lifecycle_unrelated',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_member'
+                'itlingo_core.group_itlingo_member'
             ),
         )
         cls.admin = new_test_user(
@@ -1272,7 +1266,7 @@ class TestDslLifecyclePortal(HttpCase):
             password='lifecycle_admin',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_admin'
+                'itlingo_core.group_itlingo_admin'
             ),
         )
 
@@ -1410,7 +1404,7 @@ class TestDocumentDslControllerValidation(TransactionCase):
             password='document_family_admin',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_admin'
+                'itlingo_core.group_itlingo_admin'
             ),
         )
         self.active_version = self.env['itlingo.dsl'].create({

@@ -6,3 +6,4 @@ from . import itlingo_dsl_services_audit
 from . import itlingo_org_resource
 from . import itlingo_organization
 from . import itlingo_workspace
+from . import itlingo_document

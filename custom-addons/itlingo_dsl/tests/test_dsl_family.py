@@ -79,7 +79,7 @@ class TestDslFamilyLifecycle(TransactionCase):
         user = new_test_user(
             self.env,
             login="dsl_family_maintainer",
-            groups="base.group_portal,itlingo_organizations.group_itlingo_member",
+            groups="base.group_portal,itlingo_core.group_itlingo_member",
         )
         dsl = self.env["itlingo.dsl"].create({
             "name": "Maintained Family",

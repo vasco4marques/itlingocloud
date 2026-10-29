@@ -144,7 +144,7 @@ class ItlingoTemplatingPortal(http.Controller):
             "template_lint_result": lint_result,
             **self._generation_values(scoped_document, target),
         })
-        return request.render("itlingo_documents.portal_document_detail", values)
+        return request.render("itlingo_core.portal_document_detail", values)
 
     def _get_template_document(self, document_id):
         """Return a readable template document or raise."""

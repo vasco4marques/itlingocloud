@@ -1,16 +1,14 @@
 {
     "name": "ITLingo Chatbot Integration",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "summary": "Embed the external Django chatbot UI into workspace pages",
     "category": "Website/Portal",
     "author": "ITLingo",
     "depends": [
         "website",
         "portal",
-        "itlingo_organizations",
+        "itlingo_core",
         "itlingo_website_portal",
-        "itlingo_documents",
-        "itlingo_workspace_access",
         "itlingo_integration"
     ],
     "data": [

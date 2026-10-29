@@ -11,7 +11,7 @@ class TestUnifiedTemplateModel(TransactionCase):
     def setUpClass(cls):
         super().setUpClass()
         cls.template_type = cls.env.ref(
-            "itlingo_documents.doc_type_template"
+            "itlingo_core.doc_type_template"
         )
         cls.family = cls.env["itlingo.dsl.family"].create({
             "name": "Unified Template Test DSL",

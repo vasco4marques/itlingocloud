@@ -4,7 +4,7 @@
     <!-- Configuration sub-menu under the existing ITLingo root -->
     <menuitem id="itlingo_menu_configuration"
               name="Configuration"
-              parent="itlingo_organizations.itlingo_menu_root"
+              parent="itlingo_core.itlingo_menu_root"
               sequence="90"/>
 
     <!-- DSLs menu -->
@@ -17,7 +17,7 @@
     <!-- Resources sub-menu under the existing ITLingo root -->
     <menuitem id="itlingo_menu_resources"
               name="Resources"
-              parent="itlingo_organizations.itlingo_menu_root"
+              parent="itlingo_core.itlingo_menu_root"
               sequence="80"/>
 
     <menuitem id="menu_itlingo_dsl_resource"

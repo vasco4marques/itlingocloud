@@ -18,7 +18,7 @@ class TestDslDownload(HttpCase):
             password='download_admin',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_admin'
+                'itlingo_core.group_itlingo_admin'
             ),
         )
         cls.family = cls.env['itlingo.dsl.family'].create({

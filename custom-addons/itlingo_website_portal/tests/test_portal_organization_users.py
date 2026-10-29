@@ -12,7 +12,7 @@ class TestPortalOrganizationUsers(HttpCase):
         super().setUpClass()
         groups = (
             'base.group_portal,'
-            'itlingo_organizations.group_itlingo_member'
+            'itlingo_core.group_itlingo_member'
         )
         cls.manager = new_test_user(
             cls.env,

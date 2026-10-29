@@ -4,10 +4,7 @@ These modules belong to the ITLingoCloud repository. No separate Git clone is re
 
 | Module | Purpose |
 | --- | --- |
-| `itlingo_organizations` | Organizations, membership, and roles |
-| `itlingo_workspace_access` | Workspaces and access rules |
-| `itlingo_documents` | Documents, libraries, and document types |
-| `itlingo_notifications` | Notifications and portal integration |
+| `itlingo_core` | Organizations, workspaces, documents, membership, access rules, and notifications |
 | `itlingo_integration` | API access and ITOI integration |
 | `itlingo_website_portal` | The web portal and grammar editor |
 | `itlingo_dsl` | DSL definitions, versions, and language services |

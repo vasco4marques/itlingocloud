@@ -10,7 +10,7 @@ ITOI and ITLingo-Chatbot remain separate applications. The modules that connect 
 
 | Path | Purpose |
 | --- | --- |
-| `custom-addons/` | The nine ITLingoCloud modules and their tests |
+| `custom-addons/` | The six ITLingoCloud modules and their tests |
 | `Dockerfile` | The application image, with Python and Node.js dependencies |
 | `docker-compose.local.yml` | A local application and PostgreSQL 16 database |
 | `docker-compose.yml` | The existing production configuration for the droplet |
@@ -18,7 +18,7 @@ ITOI and ITLingo-Chatbot remain separate applications. The modules that connect 
 | `odoo.docker.conf.example` | The production Odoo configuration example |
 | `deploy.sh`, `Makefile.droplet` | The existing production deployment commands |
 | `odoo/Makefile` | Optional commands for a separate upstream Odoo checkout |
-| `scripts/` | Migration, maintenance, and image retention tools |
+| `scripts/` | Docker image retention tools and service definitions |
 
 ## Get the source
 
@@ -68,7 +68,7 @@ Install Docker Engine and Docker Compose. Run all commands from this repository 
    ```sh
    docker compose -f docker-compose.local.yml run --rm odoo \
      -d itlingo \
-     -i itlingo_organizations,itlingo_workspace_access,itlingo_documents,itlingo_notifications,itlingo_integration,itlingo_website_portal,itlingo_dsl,itlingo_chatbot_integration,itlingo_templating \
+     -i itlingo_core,itlingo_dsl,itlingo_integration,itlingo_website_portal,itlingo_chatbot_integration,itlingo_templating \
      --without-demo=all --stop-after-init --no-http
    ```
 
@@ -98,11 +98,33 @@ After a source change, build the image again. If the change requires a module up
 docker compose -f docker-compose.local.yml build
 docker compose -f docker-compose.local.yml stop odoo
 docker compose -f docker-compose.local.yml run --rm odoo \
-  -d itlingo -u itlingo_website_portal --stop-after-init --no-http
+  -d itlingo -u itlingo_core,itlingo_dsl,itlingo_integration,itlingo_website_portal,itlingo_chatbot_integration,itlingo_templating \
+  --pre-upgrade-scripts=/mnt/extra-addons/itlingo_core/upgrade.py \
+  --stop-after-init --no-http
 docker compose -f docker-compose.local.yml up -d --renew-anon-volumes
 ```
 
 The upstream image declares an anonymous volume for the addons directory. Use `--renew-anon-volumes` after an image rebuild to prevent reuse of old module files.
+
+### Upgrade the former module layout
+
+Back up the database and filestore before the first upgrade to `itlingo_core`. Do not uninstall the former organization, workspace, document, or notification modules. An uninstall can delete their records.
+
+Use the update command above with `--pre-upgrade-scripts`. The script transfers module metadata before Odoo loads the new module graph. The retained models keep their tables, record IDs, and workspace keys.
+
+Use the same command for later updates. The script does not repeat a completed consolidation.
+
+### Remove retired features
+
+Back up the database and filestore before this upgrade. Core version `19.0.3.1.0` deletes the retired report/backlog schema, document library grouping, and obsolete fields.
+
+The removed fields include organization type and workspace methodology, planned cost, and current cost. The migration discards their stored values. It also removes the old sprint/backlog fields from upstream tasks, but keeps those task records.
+
+The migration keeps documents and attachments. It reclassifies documents with retired library, language-specific, report, or template types under the corresponding current document types.
+
+The document review workflow no longer requires a library. Submit for Review changes a draft to In Review; Approve and Publish keep their existing behavior.
+
+The projects API no longer returns `methodology`. Current ITOI and chatbot code do not read that field. The one-time Django importer and its commands are removed.
 
 ### Tests
 
@@ -126,6 +148,8 @@ The JavaScript components have their own `package.json` files and tests. Their R
 The production host requires `.env` and `odoo.docker.conf`, based on the examples in this repository. Replace all example passwords. The configuration binds Odoo to loopback; the existing reverse proxy provides public access.
 
 `deploy.sh` builds and publishes the image, then updates the existing droplet. The script contains the current image name, server address, and SSH key path. Examine those values before use. It requires a Git commit for the image tag.
+
+The script installs both `docker-compose.yml` and `Makefile.droplet` on the server. The Makefile invokes the consolidation script before a module update. Back up the database and filestore before the first deployment of the six-module layout.
 
 Do not run `deploy.sh` to test a local installation. It changes the production server.
 

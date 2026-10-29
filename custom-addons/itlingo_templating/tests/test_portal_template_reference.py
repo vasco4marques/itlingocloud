@@ -39,7 +39,7 @@ class TestPortalTemplateReference(HttpCase):
             password="reference_maintainer",
             groups=(
                 "base.group_portal,"
-                "itlingo_organizations.group_itlingo_member"
+                "itlingo_core.group_itlingo_member"
             ),
         )
         cls.unrelated = new_test_user(
@@ -48,7 +48,7 @@ class TestPortalTemplateReference(HttpCase):
             password="reference_unrelated",
             groups=(
                 "base.group_portal,"
-                "itlingo_organizations.group_itlingo_member"
+                "itlingo_core.group_itlingo_member"
             ),
         )
         cls.admin = new_test_user(
@@ -57,7 +57,7 @@ class TestPortalTemplateReference(HttpCase):
             password="reference_admin",
             groups=(
                 "base.group_user,"
-                "itlingo_organizations.group_itlingo_admin"
+                "itlingo_core.group_itlingo_admin"
             ),
         )
         cls.draft = cls.env["itlingo.dsl"].create({

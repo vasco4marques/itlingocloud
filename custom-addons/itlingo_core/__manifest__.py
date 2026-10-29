@@ -1,0 +1,61 @@
+{
+    'name': 'ITLingo Core',
+    'version': '19.0.3.1.0',
+    'category': 'Services',
+    'summary': 'Organizations, workspaces, documents and notifications for ITLingo Cloud',
+    'description': """
+Core ITLingo Cloud platform: organizations, roles and invitations;
+workspaces and workspace roles; typed document management; and
+in-app notifications with portal inbox.
+    """,
+    'author': 'ITLingo',
+    'website': 'https://itlingo.ist.utl.pt',
+    'depends': [
+        'base', 'contacts', 'mail', 'portal', 'auth_signup', 'website',
+    ],
+    'data': [
+        'organizations/security/itlingo_security.xml',
+        'organizations/security/ir.model.access.csv',
+        'organizations/security/itlingo_organization_rules.xml',
+        'workspaces/security/ir.model.access.csv',
+        'workspaces/security/itlingo_workspace_rules.xml',
+        'documents/security/ir.model.access.csv',
+        'documents/security/itlingo_document_rules.xml',
+        'notifications/security/ir.model.access.csv',
+        'notifications/security/itlingo_notification_rules.xml',
+        'organizations/data/auth_signup_data.xml',
+        'documents/data/itlingo_document_type_data.xml',
+        'notifications/data/mail_template_data.xml',
+        'views/portal_pagination.xml',
+        'organizations/views/itlingo_organization_role_views.xml',
+        'organizations/views/itlingo_organization_views.xml',
+        'organizations/views/itlingo_menus.xml',
+        'workspaces/views/itlingo_project_role_views.xml',
+        'workspaces/views/itlingo_workspace_views.xml',
+        'workspaces/views/itlingo_workspace_menus.xml',
+        'documents/views/itlingo_document_type_views.xml',
+        'documents/views/itlingo_document_views.xml',
+        'documents/views/itlingo_document_menus.xml',
+        'documents/views/itlingo_workspace_views.xml',
+        'documents/views/portal_document_templates.xml',
+        'notifications/views/itlingo_notification_views.xml',
+        'notifications/views/itlingo_notification_menus.xml',
+        'notifications/views/portal_notification_templates.xml',
+        'notifications/views/website_notification_bell.xml',
+    ],
+    'demo': [
+        'organizations/demo/demo.xml',
+        'workspaces/demo/demo.xml',
+        'documents/demo/demo.xml',
+        'notifications/demo/demo.xml',
+    ],
+    'assets': {
+        'web.assets_frontend': [
+            'itlingo_core/static/src/js/notification_bell.js',
+            'itlingo_core/static/src/scss/notification_bell.scss',
+        ],
+    },
+    'installable': True,
+    'application': True,
+    'license': 'LGPL-3',
+}

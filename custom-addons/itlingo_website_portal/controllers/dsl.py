@@ -8,7 +8,7 @@ from odoo.exceptions import AccessError, MissingError, UserError, ValidationErro
 from odoo.http import request, route, content_disposition
 from odoo.addons.portal.controllers.portal import CustomerPortal
 
-from .portal import paginate
+from odoo.addons.itlingo_core.controllers.pagination import paginate
 
 DSL_STATUS = ('draft', 'active', 'deprecated')
 DSL_FILE_TYPES = ('grammar', 'services', 'validation', 'examples', 'specification')
@@ -29,7 +29,7 @@ class ITLingoDslPortal(CustomerPortal):
 
     def _itlingo_is_admin(self):
         return request.env.user.has_group(
-            'itlingo_organizations.group_itlingo_admin',
+            'itlingo_core.group_itlingo_admin',
         )
 
     def _itlingo_admin_or_raise(self):

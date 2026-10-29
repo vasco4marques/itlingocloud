@@ -3,7 +3,7 @@
 
     <menuitem id="itlingo_menu_integration"
               name="Integration"
-              parent="itlingo_organizations.itlingo_menu_root"
+              parent="itlingo_core.itlingo_menu_root"
               sequence="70"/>
 
     <menuitem id="itlingo_menu_integration_tokens"
@@ -17,6 +17,6 @@
               parent="itlingo_menu_integration"
               action="itlingo_integration_settings_open"
               sequence="90"
-              groups="itlingo_organizations.group_itlingo_admin"/>
+              groups="itlingo_core.group_itlingo_admin"/>
 
 </odoo>

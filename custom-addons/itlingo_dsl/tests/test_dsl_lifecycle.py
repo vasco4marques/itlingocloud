@@ -33,7 +33,7 @@ class TestDslLifecycle(TransactionCase):
             login='lifecycle_model_maintainer',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_member'
+                'itlingo_core.group_itlingo_member'
             ),
         )
 
@@ -93,7 +93,7 @@ class TestDslLifecycle(TransactionCase):
             login='lifecycle_dsl_reader',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_member'
+                'itlingo_core.group_itlingo_member'
             ),
         )
 

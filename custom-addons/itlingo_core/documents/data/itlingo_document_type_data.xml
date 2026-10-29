@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+<data noupdate="0">
+
+    <record id="doc_type_specification" model="itlingo.document.type">
+        <field name="type_code">specification</field>
+        <field name="short_name">SPEC</field>
+        <field name="name">Specification</field>
+        <field name="extension_file"></field>
+        <field name="active" eval="True"/>
+    </record>
+
+    <record id="doc_type_template" model="itlingo.document.type">
+        <field name="type_code">template</field>
+        <field name="short_name">TPL</field>
+        <field name="name">Template</field>
+        <field name="extension_file"></field>
+        <field name="active" eval="True"/>
+    </record>
+
+    <record id="doc_type_technical_document" model="itlingo.document.type">
+        <field name="type_code">technical_document</field>
+        <field name="short_name">TECH</field>
+        <field name="name">Technical Document</field>
+        <field name="extension_file">.pdf</field>
+        <field name="active" eval="True"/>
+    </record>
+
+    <record id="doc_type_dataset" model="itlingo.document.type">
+        <field name="type_code">dataset</field>
+        <field name="short_name">DATA</field>
+        <field name="name">Dataset</field>
+        <field name="extension_file">.csv</field>
+        <field name="active" eval="True"/>
+    </record>
+
+    <record id="doc_type_tutorial" model="itlingo.document.type">
+        <field name="type_code">tutorial</field>
+        <field name="short_name">TUT</field>
+        <field name="name">Tutorial</field>
+        <field name="extension_file">.md</field>
+        <field name="active" eval="True"/>
+    </record>
+
+    <record id="doc_type_prompt_template" model="itlingo.document.type">
+        <field name="type_code">prompt_template</field>
+        <field name="short_name">PROMPT</field>
+        <field name="name">Prompt Template</field>
+        <field name="extension_file">.md</field>
+        <field name="active" eval="True"/>
+    </record>
+
+    <record id="doc_type_other" model="itlingo.document.type">
+        <field name="type_code">other</field>
+        <field name="short_name">OTHER</field>
+        <field name="name">Other</field>
+        <field name="extension_file"></field>
+        <field name="active" eval="True"/>
+    </record>
+
+</data>
+</odoo>

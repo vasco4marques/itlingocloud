@@ -206,7 +206,7 @@
                     </table>
                 </div>
             </div>
-            <t t-call="itlingo_website_portal.portal_list_pager"/>
+            <t t-call="itlingo_core.portal_list_pager"/>
         </t>
     </template>
 
@@ -320,7 +320,7 @@
                     </tr>
                 </tbody>
             </t>
-            <t t-call="itlingo_website_portal.portal_list_pager"/>
+            <t t-call="itlingo_core.portal_list_pager"/>
         </t>
     </template>
 
@@ -800,7 +800,7 @@
                     </div>
                 </div>
             </div>
-            <t t-call="itlingo_website_portal.portal_list_pager"/>
+            <t t-call="itlingo_core.portal_list_pager"/>
         </t>
     </template>
 
@@ -927,7 +927,7 @@
                         <p class="text-muted mb-0">There are no published organization documents yet.</p>
                     </div>
                 </div>
-                <t t-call="itlingo_website_portal.portal_list_pager">
+                <t t-call="itlingo_core.portal_list_pager">
                     <t t-set="pager" t-value="organization_pager"/>
                 </t>
             </t>
@@ -961,12 +961,12 @@
                             </select>
                             <div t-if="error.get('document_type_id')" class="text-danger small mt-1"><t t-out="error['document_type_id']"/></div>
                         </div>
-                        <t t-call="itlingo_documents.portal_document_meta_fields"/>
+                        <t t-call="itlingo_core.portal_document_meta_fields"/>
                         <div class="mb-3">
                             <label class="form-label" for="ws_doc_file">File</label>
                             <input type="file" class="form-control" id="ws_doc_file" name="document_file"/>
                         </div>
-                        <t t-call="itlingo_documents.portal_document_template_fields"/>
+                        <t t-call="itlingo_core.portal_document_template_fields"/>
                         <div class="d-flex gap-2">
                             <button type="submit" class="btn btn-primary">Create</button>
                             <a t-attf-href="/my/workspaces/#{project.id}/documents" class="btn btn-outline-secondary">Cancel</a>

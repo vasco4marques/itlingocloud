@@ -1,0 +1,367 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Reusable template field (output filename pattern), shown when the
+         selected Document Type is "Template". Rendered only when the templating
+         module is installed (template_type_id set). Reused by create/edit forms. -->
+    <template id="portal_document_template_fields" name="Document Template Fields">
+        <t t-if="template_type_id">
+            <div id="doc_template_opts" class="mb-3" style="display:none;">
+                <div class="alert alert-info py-2">
+                    Templates require one DSL family and a DOCX, XLSX, or UTF-8 text file.
+                </div>
+                <label class="form-label" for="doc_output_pattern">Output filename pattern</label>
+                <input type="text" class="form-control" id="doc_output_pattern"
+                       name="output_filename_pattern"
+                       t-att-value="form.get('output_filename_pattern') or '{{ spec_name }}_{{ template_name }}.docx'"/>
+                <div class="form-text">
+                    Jinja2 pattern for the generated file. Available:
+                    <code>{{ template_name }}</code> (this template's name),
+                    <code>{{ spec_name }}</code> (uploaded specification name).
+                    DSL-specific scalar fields from the selected template context
+                    may also be used.
+                    Defaults to the document name. Templates are excluded from
+                    the knowledge pool and cannot be sent to ITOI.
+                </div>
+            </div>
+            <script type="text/javascript">
+                (function(){
+                    var sel = document.querySelector('select[name=document_type_id]');
+                    var opts = document.getElementById('doc_template_opts');
+                    var family = document.querySelector('select[name=dsl_family_id]');
+                    var files = document.querySelectorAll('input[type=file][name=document_file]');
+                    var tplId = '<t t-esc="template_type_id"/>';
+                    var templateAccept = '<t t-esc="template_file_accept"/>';
+                    function sync(){
+                        if(sel &amp;&amp; opts){
+                            var isTemplate = String(sel.value) === tplId;
+                            opts.style.display = isTemplate ? '' : 'none';
+                            if(family){ family.required = isTemplate; }
+                            files.forEach(function(file){
+                                if(!file.dataset.originalAccept){
+                                    file.dataset.originalAccept = file.getAttribute('accept') || '';
+                                }
+                                file.setAttribute('accept', isTemplate ? templateAccept : file.dataset.originalAccept);
+                            });
+                        }
+                    }
+                    if(sel){ sel.addEventListener('change', sync); }
+                    sync();
+                })();
+            </script>
+        </t>
+    </template>
+
+    <!-- Language + DSL family/version selects shared by the document create/edit forms.
+         Expects `form`, `dsl_families`, `dsl_versions` and `doc_language_selection` in context. -->
+    <template id="portal_document_meta_fields" name="Document Language/DSL Fields">
+        <div class="row">
+            <div class="mb-3 col-md-4">
+                <label class="form-label" for="doc_meta_language">Language</label>
+                <select class="form-select" id="doc_meta_language" name="language">
+                    <option value="">—</option>
+                    <t t-foreach="doc_language_selection" t-as="opt">
+                        <option t-att-value="opt[0]"
+                                t-att-selected="(form.get('language') or '') == opt[0]">
+                            <t t-out="opt[1]"/>
+                        </option>
+                    </t>
+                </select>
+            </div>
+            <div class="mb-3 col-md-4">
+                <label class="form-label" for="doc_meta_dsl_family">DSL family</label>
+                <select class="form-select" id="doc_meta_dsl_family" name="dsl_family_id">
+                    <option value="">—</option>
+                    <t t-foreach="dsl_families" t-as="family">
+                        <option t-att-value="family.id"
+                                t-att-selected="str(form.get('dsl_family_id') or '') == str(family.id)">
+                            <t t-out="family.acronym"/>
+                            <t t-if="family.name"> - <t t-out="family.name"/></t>
+                        </option>
+                    </t>
+                </select>
+            </div>
+            <div class="mb-3 col-md-4">
+                <label class="form-label" for="doc_meta_dsl_version">DSL version</label>
+                <select class="form-select" id="doc_meta_dsl_version" name="dsl_version_id">
+                    <option value="">—</option>
+                    <t t-foreach="dsl_versions" t-as="dsl_rec">
+                        <option t-att-value="dsl_rec.id"
+                                t-att-data-family-id="dsl_rec.family_id.id"
+                                t-att-selected="str(form.get('dsl_version_id') or '') == str(dsl_rec.id)">
+                            <t t-out="dsl_rec.version"/> - <t t-out="dict(dsl_rec._fields['status'].selection).get(dsl_rec.status)"/>
+                        </option>
+                    </t>
+                </select>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function(){
+                var family = document.querySelector('select[name=dsl_family_id]');
+                var version = document.querySelector('select[name=dsl_version_id]');
+                if(!family || !version){ return; }
+                function sync(){
+                    var familyId = String(family.value || '');
+                    Array.prototype.forEach.call(version.options, function(option){
+                        var visible = !option.value || option.getAttribute('data-family-id') === familyId;
+                        option.hidden = !visible;
+                        if(!visible &amp;&amp; option.selected){ option.selected = false; }
+                    });
+                }
+                family.addEventListener('change', sync);
+                sync();
+            })();
+        </script>
+    </template>
+
+    <!-- Document detail (scoped under a workspace or organization).
+         Callers must provide ``doc_base_url`` (e.g. /my/workspaces/5/documents
+         or /my/organizations/3/documents) used to build the action links.
+         Rendered inside the workspace / organization hub shell (sidebar +
+         breadcrumbs) when the controller passes the hub context. -->
+    <template id="portal_document_detail" name="Document Detail">
+        <t t-if="workspace_hub">
+            <t t-call="itlingo_website_portal.portal_workspace_hub_shell">
+                <t t-call="itlingo_core.portal_document_detail_inner"/>
+            </t>
+        </t>
+        <t t-elif="organization_hub">
+            <t t-call="itlingo_website_portal.portal_organization_hub_shell">
+                <t t-call="itlingo_core.portal_document_detail_inner"/>
+            </t>
+        </t>
+        <t t-else="">
+            <t t-call="portal.portal_layout">
+                <t t-call="itlingo_core.portal_document_detail_inner"/>
+            </t>
+        </t>
+    </template>
+
+    <template id="portal_document_detail_inner" name="Document Detail (inner)">
+            <div t-if="doc_message == 'saved'" class="alert alert-success" role="alert">
+                Document saved.
+            </div>
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center p-3">
+                    <div>
+                        <h2 class="h5 fw-semibold mb-0"><t t-out="document.name"/></h2>
+                        <span t-if="document_scope == 'organization'" class="text-muted small">
+                            Organization document
+                        </span>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span t-if="document_scope == 'organization'" class="badge bg-light text-dark border">
+                            Organization
+                        </span>
+                        <span t-attf-class="badge rounded-pill
+                            #{'text-bg-secondary' if document.status == 'draft'
+                              else 'text-bg-warning' if document.status == 'in_review'
+                              else 'text-bg-success' if document.status == 'approved'
+                              else 'text-bg-primary' if document.status == 'published'
+                              else 'text-bg-dark'}">
+                            <t t-out="dict(document._fields['status'].selection).get(document.status)"/>
+                        </span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <dl>
+                                <dt>Workspace</dt>
+                                <dd><t t-out="document.project_id.name or 'N/A'"/></dd>
+                                <dt>Organization</dt>
+                                <dd><t t-out="document.organization_id.name or 'N/A'"/></dd>
+                                <dt>Document Type</dt>
+                                <dd><t t-out="document.document_type_id.name or 'N/A'"/></dd>
+                                <dt>DSL family</dt>
+                                <dd>
+                                    <t t-if="document.dsl_family_id" t-out="document.dsl_family_id.acronym"/>
+                                    <t t-else="">—</t>
+                                </dd>
+                                <dt>DSL version</dt>
+                                <dd>
+                                    <t t-if="document.dsl_version_id">
+                                        <t t-out="document.dsl_version_id.version"/> -
+                                        <t t-out="dict(document.dsl_version_id._fields['status'].selection).get(document.dsl_version_id.status)"/>
+                                    </t>
+                                    <t t-else="">—</t>
+                                </dd>
+                                <dt>Grounding knowledge</dt>
+                                <dd>
+                                    <span t-if="document.status != 'published'" class="badge bg-secondary">
+                                        Unavailable until published
+                                    </span>
+                                    <span t-elif="document.dsl_knowledge" class="badge bg-info text-dark">
+                                        In grounding knowledge
+                                    </span>
+                                    <span t-else="" class="badge bg-light text-dark border">
+                                        Not included
+                                    </span>
+                                </dd>
+                            </dl>
+                        </div>
+                        <div class="col-md-6">
+                            <dl>
+                                <dt>Language</dt>
+                                <dd>
+                                    <t t-if="document.language" t-out="dict(document._fields['language'].selection).get(document.language)"/>
+                                    <t t-else="">—</t>
+                                </dd>
+                                <dt>Format</dt>
+                                <dd>
+                                    <t t-if="document.document_format" t-out="dict(document._fields['document_format'].selection).get(document.document_format)"/>
+                                    <t t-else="">—</t>
+                                </dd>
+                                <dt>Version</dt>
+                                <dd><t t-out="document.version"/></dd>
+                                <dt>Creator</dt>
+                                <dd><t t-out="document.creator_id.name"/></dd>
+                                <dt>Created</dt>
+                                <dd>
+                                    <t t-call="itlingo_website_portal.portal_date">
+                                        <t t-set="date_value" t-value="document.creation_date"/>
+                                    </t>
+                                </dd>
+                                <dt>Last Modified</dt>
+                                <dd>
+                                    <t t-call="itlingo_website_portal.portal_date">
+                                        <t t-set="date_value" t-value="document.write_date"/>
+                                    </t>
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mt-3">
+                        <a t-if="document.document_file"
+                           t-attf-href="#{doc_base_url}/#{document.id}/download"
+                           class="btn btn-primary">
+                            <i class="fa fa-download"/> Download File
+                        </a>
+                        <a t-if="can_edit_document"
+                           t-attf-href="#{doc_base_url}/#{document.id}/edit"
+                           class="btn btn-outline-primary">
+                            <i class="fa fa-pencil"/> Edit
+                        </a>
+                        <form t-if="can_edit_document"
+                              t-attf-action="#{doc_base_url}/#{document.id}/delete"
+                              method="post" class="d-inline"
+                              onsubmit="return confirm('Delete this document? This cannot be undone.');">
+                            <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                            <button type="submit" class="btn btn-outline-danger">
+                                <i class="fa fa-trash"/> Delete
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+    </template>
+
+    <template id="portal_document_edit" name="Document Edit">
+        <t t-if="workspace_hub">
+            <t t-call="itlingo_website_portal.portal_workspace_hub_shell">
+                <t t-call="itlingo_core.portal_document_edit_inner"/>
+            </t>
+        </t>
+        <t t-elif="organization_hub">
+            <t t-call="itlingo_website_portal.portal_organization_hub_shell">
+                <t t-call="itlingo_core.portal_document_edit_inner"/>
+            </t>
+        </t>
+        <t t-else="">
+            <t t-call="portal.portal_layout">
+                <t t-call="itlingo_core.portal_document_edit_inner"/>
+            </t>
+        </t>
+    </template>
+
+    <template id="portal_document_edit_inner" name="Document Edit (inner)">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-header bg-white p-3">
+                    <h2 class="h5 fw-semibold mb-0">Edit document: <t t-out="document.name"/></h2>
+                </div>
+                <div class="card-body">
+                    <div t-if="error.get('_form')" class="alert alert-danger" role="alert">
+                        <t t-out="error['_form']"/>
+                    </div>
+                    <form t-attf-action="#{doc_base_url}/#{document.id}/edit"
+                          method="post" enctype="multipart/form-data">
+                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                        <div class="mb-3">
+                            <label class="form-label" for="doc_edit_name">Name</label>
+                            <input type="text" class="form-control" id="doc_edit_name" name="name" required=""
+                                   t-att-value="form.get('name') or ''"/>
+                            <div t-if="error.get('name')" class="text-danger small mt-1"><t t-out="error['name']"/></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="doc_edit_type">Document type</label>
+                            <select class="form-select" id="doc_edit_type" name="document_type_id">
+                                <option value="">—</option>
+                                <t t-foreach="doc_types" t-as="dt">
+                                    <option t-att-value="dt.id"
+                                            t-att-selected="str(form.get('document_type_id') or '') == str(dt.id)">
+                                        <t t-out="dt.name"/>
+                                    </option>
+                                </t>
+                            </select>
+                            <div t-if="error.get('document_type_id')" class="text-danger small mt-1"><t t-out="error['document_type_id']"/></div>
+                        </div>
+                        <t t-call="itlingo_core.portal_document_meta_fields"/>
+                        <div class="mb-3">
+                            <label class="form-label" for="doc_edit_status">Status</label>
+                            <select class="form-select" id="doc_edit_status" name="status">
+                                <t t-foreach="status_selection" t-as="opt">
+                                    <option t-att-value="opt[0]"
+                                            t-att-selected="(form.get('status') or document.status) == opt[0]">
+                                        <t t-out="opt[1]"/>
+                                    </option>
+                                </t>
+                            </select>
+                            <div t-if="error.get('status')" class="text-danger small mt-1"><t t-out="error['status']"/></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="doc_edit_version">Version</label>
+                            <input type="text" class="form-control" id="doc_edit_version" name="version"
+                                   t-att-value="form.get('version') or ''"/>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="doc_edit_dsl" name="dsl_knowledge" value="1"
+                                   t-att-checked="form.get('dsl_knowledge') or None"
+                                   t-att-disabled="None if (form.get('status') or document.status) == 'published' else 'disabled'"/>
+                            <label class="form-check-label" for="doc_edit_dsl">Grounding knowledge</label>
+                            <div class="form-text" id="doc_edit_dsl_help">Only <strong>published</strong> text-like documents can be marked. The file's content is added to this organization / workspace knowledge the chatbot uses for grounding.</div>
+                            <div t-if="error.get('dsl_knowledge')" class="text-danger small mt-1"><t t-out="error['dsl_knowledge']"/></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="doc_edit_file">Replace file (optional)</label>
+                            <input type="file" class="form-control" id="doc_edit_file" name="document_file"/>
+                            <div t-if="document.file_name" class="form-text">
+                                Current file: <t t-out="document.file_name"/>
+                            </div>
+                        </div>
+                        <t t-call="itlingo_core.portal_document_template_fields"/>
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-primary">Save</button>
+                            <a t-attf-href="#{doc_base_url}/#{document.id}" class="btn btn-outline-secondary">Cancel</a>
+                        </div>
+                    </form>
+                    <script type="text/javascript">
+                        (function () {
+                            var status = document.getElementById('doc_edit_status');
+                            var checkbox = document.getElementById('doc_edit_dsl');
+                            if (!status || !checkbox) { return; }
+                            function syncGroundingKnowledge() {
+                                var enabled = status.value === 'published';
+                                checkbox.disabled = !enabled;
+                                if (!enabled) {
+                                    checkbox.checked = false;
+                                }
+                            }
+                            status.addEventListener('change', syncGroundingKnowledge);
+                            syncGroundingKnowledge();
+                        })();
+                    </script>
+                </div>
+            </div>
+    </template>
+
+</odoo>

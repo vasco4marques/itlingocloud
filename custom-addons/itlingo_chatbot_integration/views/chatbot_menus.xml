@@ -3,7 +3,7 @@
 
     <menuitem id="itlingo_menu_chatbot"
               name="Chatbot"
-              parent="itlingo_organizations.itlingo_menu_root"
+              parent="itlingo_core.itlingo_menu_root"
               sequence="50"/>
 
     <menuitem id="itlingo_menu_chatbot_conversations"
@@ -100,23 +100,23 @@
 
     <menuitem id="itlingo_menu_chatbot_settings"
               name="Chatbot Settings"
-              parent="itlingo_organizations.itlingo_menu_root"
+              parent="itlingo_core.itlingo_menu_root"
               action="itlingo_chatbot_settings_open"
               sequence="75"
-              groups="itlingo_organizations.group_itlingo_admin"/>
+              groups="itlingo_core.group_itlingo_admin"/>
 
     <menuitem id="itlingo_menu_chatbot_settings_running"
               name="Running Settings"
               parent="itlingo_menu_chatbot_settings"
               action="itlingo_chatbot_settings_open"
               sequence="10"
-              groups="itlingo_organizations.group_itlingo_admin"/>
+              groups="itlingo_core.group_itlingo_admin"/>
 
     <menuitem id="itlingo_menu_chatbot_settings_operational"
               name="LLM Settings"
               parent="itlingo_menu_chatbot_settings"
               action="itlingo_chatbot_settings_open_operational"
               sequence="20"
-              groups="itlingo_organizations.group_itlingo_admin"/>
+              groups="itlingo_core.group_itlingo_admin"/>
 
 </odoo>

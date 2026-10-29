@@ -273,7 +273,6 @@ class ITLingoIntegrationAPI(http.Controller):
         data = [{
             'id': p.id,
             'name': p.name,
-            'methodology': p.methodology,
             'business_status': p.business_status,
         } for p in projects]
 

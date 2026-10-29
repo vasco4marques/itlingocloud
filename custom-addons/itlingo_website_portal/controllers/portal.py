@@ -4,46 +4,11 @@ from urllib.parse import urlencode
 from odoo import _, http
 from odoo.exceptions import AccessError, MissingError, UserError, ValidationError
 from odoo.http import request, route, content_disposition
-from odoo.addons.portal.controllers.portal import CustomerPortal, pager
-from odoo.addons.itlingo_documents.constants import SUPPORTED_TEMPLATE_ACCEPT
-
-# Rows per page on every portal list. Keep a single value so all listing
-# pages paginate the same way.
-PORTAL_PAGE_STEP = 10
-
-
-def paginate(records_model, domain, url, page, url_args=None, order=None,
-             step=PORTAL_PAGE_STEP):
-    """Shared pagination for portal lists.
-
-    Counts the records matching ``domain``, builds the standard portal
-    pager for ``url`` and fetches only the current page. Returns
-    ``(records, total, pager_dict)``.
-    """
-    total = records_model.search_count(domain)
-    page_detail = pager(
-        url=url,
-        total=total,
-        page=page,
-        step=step,
-        url_args=url_args or None,
-    )
-    _pager_add_summary(page_detail, total, step)
-    records = records_model.search(
-        domain, limit=step, offset=page_detail['offset'], order=order,
-    )
-    return records, total, page_detail
-
-
-def _pager_add_summary(page_detail, total, step):
-    """Extra keys consumed by the shared `portal_list_pager` template to
-    render the "Showing X-Y of Z" summary (core `portal.pager` only
-    renders page links, and only when there is more than one page)."""
-    page_detail.update({
-        'total': total,
-        'range_start': page_detail['offset'] + 1 if total else 0,
-        'range_end': min(page_detail['offset'] + step, total),
-    })
+from odoo.addons.portal.controllers.portal import CustomerPortal
+from odoo.addons.itlingo_core.controllers.pagination import (
+    PORTAL_PAGE_STEP, paginate,
+)
+from odoo.addons.itlingo_core.documents.constants import SUPPORTED_TEMPLATE_ACCEPT
 
 
 class ITLingoPortal(CustomerPortal):
@@ -731,7 +696,7 @@ class ITLingoPortal(CustomerPortal):
     def _template_type_id(self):
         """Id of the unified 'Template' type, or False when unavailable."""
         t = request.env.ref(
-            'itlingo_documents.doc_type_template', raise_if_not_found=False,
+            'itlingo_core.doc_type_template', raise_if_not_found=False,
         )
         return t.id if t else False
 
@@ -890,7 +855,7 @@ class ITLingoPortal(CustomerPortal):
 
     def _portal_is_admin(self):
         return request.env.user.has_group(
-            'itlingo_organizations.group_itlingo_admin',
+            'itlingo_core.group_itlingo_admin',
         )
 
     def _portal_visible_dsl_families(self):
@@ -1067,7 +1032,7 @@ class ITLingoPortal(CustomerPortal):
         doc_types = DocType.search([], order='name')
         status_selection = document._fields['status'].selection
         template_type = request.env.ref(
-            'itlingo_documents.doc_type_template', raise_if_not_found=False,
+            'itlingo_core.doc_type_template', raise_if_not_found=False,
         )
         template_type_id = template_type.id if template_type else False
         has_pattern = 'output_filename_pattern' in document._fields
@@ -1153,7 +1118,7 @@ class ITLingoPortal(CustomerPortal):
                         values['error']['_form'] = str(err)
                     else:
                         return request.redirect(f'{doc_base_url}/{document.id}?message=saved')
-        return request.render('itlingo_documents.portal_document_edit', values)
+        return request.render('itlingo_core.portal_document_edit', values)
 
     @route(
         '/my/organizations/<int:org_id>/documents/new',
@@ -1352,7 +1317,7 @@ class ITLingoPortal(CustomerPortal):
             'org_hub_page': 'documentation',
             'page_name': 'organization_document_detail',
         })
-        return request.render('itlingo_documents.portal_document_detail', values)
+        return request.render('itlingo_core.portal_document_detail', values)
 
     @route(
         '/my/organizations/<int:org_id>/documents/<int:document_id>/edit',
@@ -3267,7 +3232,7 @@ class ITLingoPortal(CustomerPortal):
             **self._portal_workspace_hub_common(
                 project, 'documentation', public_hub=False),
         })
-        return request.render('itlingo_documents.portal_document_detail', values)
+        return request.render('itlingo_core.portal_document_detail', values)
 
     @route(
         '/my/workspaces/<int:project_id>/documents/<int:document_id>/edit',
@@ -3353,7 +3318,7 @@ class ITLingoPortal(CustomerPortal):
             **self._portal_workspace_hub_common(
                 project, 'documentation', public_hub=False),
         })
-        return request.render('itlingo_documents.portal_document_detail', values)
+        return request.render('itlingo_core.portal_document_detail', values)
 
     @route(
         '/my/workspaces/<int:project_id>/documents/organization/<int:document_id>/edit',

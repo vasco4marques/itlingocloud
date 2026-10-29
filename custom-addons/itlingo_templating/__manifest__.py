@@ -1,6 +1,6 @@
 {
     'name': 'ITLingo Templating',
-    'version': '19.0.1.8.0',
+    'version': '19.0.1.9.0',
     'category': 'Services',
     'summary': 'Generate office and text documents, single or multi-file, from any published DSL',
     'description': """
@@ -13,7 +13,7 @@ output files with {# output: ... #} fences and download them as one ZIP.
     """,
     'author': 'ITLingo',
     'website': 'https://itlingo.ist.utl.pt',
-    'depends': ['itlingo_documents', 'itlingo_dsl', 'itlingo_website_portal'],
+    'depends': ['itlingo_core', 'itlingo_dsl', 'itlingo_website_portal'],
     'external_dependencies': {'python': ['docxtpl', 'openpyxl']},
     'data': [
         'views/portal_template_reference.xml',

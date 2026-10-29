@@ -4,7 +4,7 @@
     <record id="itlingo_document_view_form_templating" model="ir.ui.view">
         <field name="name">itlingo.document.form.templating</field>
         <field name="model">itlingo.document</field>
-        <field name="inherit_id" ref="itlingo_documents.itlingo_document_view_form"/>
+        <field name="inherit_id" ref="itlingo_core.itlingo_document_view_form"/>
         <field name="arch" type="xml">
             <field name="dsl_knowledge" position="after">
                 <field name="is_template"/>
@@ -25,7 +25,7 @@
     <record id="itlingo_document_view_tree_templating" model="ir.ui.view">
         <field name="name">itlingo.document.tree.templating</field>
         <field name="model">itlingo.document</field>
-        <field name="inherit_id" ref="itlingo_documents.itlingo_document_view_tree"/>
+        <field name="inherit_id" ref="itlingo_core.itlingo_document_view_tree"/>
         <field name="arch" type="xml">
             <field name="dsl_knowledge" position="after">
                 <field name="is_template" optional="show"/>
@@ -36,7 +36,7 @@
     <record id="itlingo_document_view_search_templating" model="ir.ui.view">
         <field name="name">itlingo.document.search.templating</field>
         <field name="model">itlingo.document</field>
-        <field name="inherit_id" ref="itlingo_documents.itlingo_document_view_search"/>
+        <field name="inherit_id" ref="itlingo_core.itlingo_document_view_search"/>
         <field name="arch" type="xml">
             <filter name="dsl_knowledge" position="after">
                 <filter name="is_template" string="Templates"

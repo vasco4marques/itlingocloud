@@ -16,7 +16,7 @@ class TestPortalWorkspaceOrgDocuments(HttpCase):
             name='Workspace Organization Documents Member',
             groups=(
                 'base.group_portal,'
-                'itlingo_organizations.group_itlingo_member'
+                'itlingo_core.group_itlingo_member'
             ),
         )
         cls.organization = cls.env['itlingo.organization'].sudo().create({
@@ -42,7 +42,7 @@ class TestPortalWorkspaceOrgDocuments(HttpCase):
         cls.document = cls.env['itlingo.document'].sudo().create({
             'name': 'Published Organization Workspace Document',
             'document_type_id': cls.env.ref(
-                'itlingo_documents.doc_type_other',
+                'itlingo_core.doc_type_other',
             ).id,
             'organization_id': cls.organization.id,
             'project_id': False,

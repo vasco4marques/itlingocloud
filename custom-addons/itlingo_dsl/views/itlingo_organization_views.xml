@@ -4,7 +4,7 @@
     <record id="itlingo_organization_view_form_inherit_dsl" model="ir.ui.view">
         <field name="name">itlingo.organization.form.inherit.dsl</field>
         <field name="model">itlingo.organization</field>
-        <field name="inherit_id" ref="itlingo_organizations.itlingo_organization_view_form"/>
+        <field name="inherit_id" ref="itlingo_core.itlingo_organization_view_form"/>
         <field name="arch" type="xml">
             <xpath expr="//notebook" position="inside">
                 <page string="DSLs" name="dsls">

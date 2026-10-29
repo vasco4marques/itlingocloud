@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Shared list pager footer, used below every paginated table. Expects
+         `pager` (the dict built by itlingo_core.controllers.pagination.paginate) in the
+         rendering context. Always shows the "Showing X-Y of Z" summary when
+         there are results; the page controls (core portal.pager) appear only
+         when there is more than one page. -->
+    <template id="portal_list_pager" name="Shared list pager">
+        <div t-if="pager" class="o_portal_pager text-center mt-3">
+            <p t-if="pager.get('total')" class="text-muted small mb-1">
+                Showing <t t-out="pager['range_start']"/>&#8211;<t t-out="pager['range_end']"/>
+                of <t t-out="pager['total']"/>
+            </p>
+            <t t-call="portal.pager"/>
+        </div>
+    </template>
+
+</odoo>

@@ -4,7 +4,7 @@
     <!-- Templates are operational records: make generation the primary detail
          experience while keeping management metadata and actions available. -->
     <template id="portal_document_detail_generate"
-              inherit_id="itlingo_documents.portal_document_detail_inner"
+              inherit_id="itlingo_core.portal_document_detail_inner"
               name="Template Generation Detail">
         <xpath expr="//div[hasclass('card')][1]" position="attributes">
             <attribute name="t-if">not document.is_template</attribute>

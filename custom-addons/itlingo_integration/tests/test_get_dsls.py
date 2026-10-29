@@ -98,7 +98,7 @@ class TestGetDsls(HttpCase):
             "role": "ws_member",
             "state": "accepted",
         })
-        doc_type = cls.env.ref("itlingo_documents.doc_type_specification")
+        doc_type = cls.env.ref("itlingo_core.doc_type_specification")
         cls.workspace_source = cls.env["itlingo.document"].create({
             "name": "Billing ASL",
             "document_type_id": doc_type.id,

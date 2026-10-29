@@ -140,7 +140,7 @@ class TestPortalGenerate(HttpCase):
             "name": "Requirements report",
             "organization_id": cls.organization.id,
             "document_type_id": cls.env.ref(
-                "itlingo_documents.doc_type_template"
+                "itlingo_core.doc_type_template"
             ).id,
             "dsl_family_id": cls.family.id,
             "dsl_version_id": cls.dsl.id,
@@ -177,7 +177,7 @@ class TestPortalGenerate(HttpCase):
             "name": "Workspace report",
             "project_id": cls.workspace.id,
             "document_type_id": cls.env.ref(
-                "itlingo_documents.doc_type_template"
+                "itlingo_core.doc_type_template"
             ).id,
             "dsl_family_id": cls.family.id,
             "dsl_version_id": cls.dsl.id,

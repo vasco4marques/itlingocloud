@@ -379,10 +379,9 @@ class ItlingoDsl(models.Model):
     @api.model
     def _refresh_document_formats(self):
         """Recompute stored formats after the registered extensions change."""
-        Document = self.env.get("itlingo.document")
-        if Document is None or "document_format" not in Document._fields:
-            return
-        documents = Document.sudo().search([("file_name", "!=", False)])
+        documents = self.env["itlingo.document"].sudo().search(
+            [("file_name", "!=", False)]
+        )
         if documents:
             documents._compute_document_format()
             documents.flush_recordset(["document_format"])
@@ -759,7 +758,7 @@ class ItlingoDsl(models.Model):
     def action_validate_draft(self):
         """Run current grammar and services checks without publishing."""
         if not self.env.user.has_group(
-            "itlingo_organizations.group_itlingo_admin"
+            "itlingo_core.group_itlingo_admin"
         ):
             unauthorized = self.filtered(
                 lambda dsl: not dsl._is_maintained_by(self.env.user)
@@ -789,7 +788,7 @@ class ItlingoDsl(models.Model):
         templating or ITOI parsers; those consume the published record grammar.
         """
         if not self.env.user.has_group(
-            "itlingo_organizations.group_itlingo_admin"
+            "itlingo_core.group_itlingo_admin"
         ):
             raise AccessError(_(
                 "Only platform administrators can publish or reactivate DSLs."

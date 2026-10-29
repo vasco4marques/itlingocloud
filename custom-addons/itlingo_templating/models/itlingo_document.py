@@ -43,7 +43,7 @@ class ItlingoDocument(models.Model):
             ], order="id", limit=1)
             can_select = (
                 self.env.user.has_group(
-                    "itlingo_organizations.group_itlingo_admin",
+                    "itlingo_core.group_itlingo_admin",
                 )
                 or self.env.user.id in family.sudo().maintainer_ids.ids
             )

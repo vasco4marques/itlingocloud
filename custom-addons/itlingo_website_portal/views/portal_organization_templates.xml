@@ -184,7 +184,7 @@
                     </table>
                 </div>
             </div>
-            <t t-call="itlingo_website_portal.portal_list_pager"/>
+            <t t-call="itlingo_core.portal_list_pager"/>
         </t>
     </template>
 
@@ -446,7 +446,7 @@
                     </table>
                 </div>
             </div>
-            <t t-call="itlingo_website_portal.portal_list_pager"/>
+            <t t-call="itlingo_core.portal_list_pager"/>
         </t>
     </template>
 
@@ -497,13 +497,13 @@
                             </select>
                             <div t-if="error.get('document_type_id')" class="text-danger small mt-1"><t t-out="error['document_type_id']"/></div>
                         </div>
-                        <t t-call="itlingo_documents.portal_document_meta_fields"/>
+                        <t t-call="itlingo_core.portal_document_meta_fields"/>
                         <div class="mb-3">
                             <label class="form-label" for="doc_new_file">File</label>
                             <input type="file" class="form-control" id="doc_new_file" name="document_file"/>
                             <div class="form-text">Optional for a draft; you can attach a file later from the backend if needed.</div>
                         </div>
-                        <t t-call="itlingo_documents.portal_document_template_fields"/>
+                        <t t-call="itlingo_core.portal_document_template_fields"/>
                         <div class="d-flex gap-2">
                             <button type="submit" class="btn btn-primary">Create</button>
                             <a t-attf-href="/my/organizations/#{organization.id}/documents" class="btn btn-outline-secondary">Cancel</a>
@@ -719,7 +719,7 @@
                 </div>
             </div>
             <t t-if="can_see_all_members">
-                <t t-call="itlingo_website_portal.portal_list_pager"/>
+                <t t-call="itlingo_core.portal_list_pager"/>
             </t>
         </t>
     </template>

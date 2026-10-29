@@ -5,7 +5,7 @@ import re
 from odoo import http
 from odoo.http import content_disposition, request
 
-from odoo.addons.itlingo_documents.constants import SUPPORTED_TEMPLATE_ACCEPT
+from odoo.addons.itlingo_core.documents.constants import SUPPORTED_TEMPLATE_ACCEPT
 from odoo.addons.itlingo_website_portal.controllers.dsl import ITLingoDslPortal
 from odoo.addons.itlingo_templating.services import rendering, template_linter
 from odoo.addons.itlingo_templating.services.starter_template import (

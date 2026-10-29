@@ -161,7 +161,7 @@ class TestDslGrammar(TransactionCase):
         manager = new_test_user(
             self.env,
             login='grammar_acl_manager',
-            groups='itlingo_organizations.group_itlingo_manager',
+            groups='itlingo_core.group_itlingo_manager',
         )
         with self.assertRaises(AccessError):
             self.env['itlingo.dsl'].with_user(manager).create({

@@ -126,7 +126,7 @@
                 </table>
                 </div>
             </div>
-            <t t-call="itlingo_website_portal.portal_list_pager"/>
+            <t t-call="itlingo_core.portal_list_pager"/>
         </t>
     </template>
 

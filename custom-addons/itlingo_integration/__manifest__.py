@@ -1,6 +1,6 @@
 {
     'name': 'ITLingo Integration',
-    'version': '19.0.1.3.0',
+    'version': '19.0.1.4.0',
     'category': 'Services',
     'summary': 'ITOI token-based integration for external ITLingo tools',
     'description': """
@@ -11,8 +11,7 @@ External integration module for connecting ITLingo desktop tools
     'website': 'https://itlingo.ist.utl.pt',
     'depends': [
         'base', 'mail',
-        'itlingo_organizations', 'itlingo_workspace_access',
-        'itlingo_dsl', 'itlingo_documents',
+        'itlingo_core', 'itlingo_dsl',
     ],
     'external_dependencies': {'python': ['cryptography']},
     'data': [

@@ -7,7 +7,7 @@
 #
 # Only valid after the Docker cutover (see DEPLOYMENT.md §3.1) — aborts if the
 # old systemd odoo service is still active. Sudo password will be prompted once
-# on the server to install docker-compose.yml and bump ODOO_TAG in /opt/odoo/.env.
+# on the server to install the deployment files and update ODOO_TAG in /opt/odoo/.env.
 set -euo pipefail
 
 IMAGE=vasco4marques/itlingo-odoo
@@ -31,6 +31,7 @@ fi
 
 echo ">>> Deploying $IMAGE:$SHA to $SERVER"
 scp -i "$SSH_KEY" docker-compose.yml "$SERVER:/tmp/docker-compose.deploy.yml"
+scp -i "$SSH_KEY" Makefile.droplet "$SERVER:/tmp/Makefile.odoo.deploy"
 ssh -i "$SSH_KEY" -t "$SERVER" "
     set -euo pipefail
     if systemctl is-active --quiet odoo; then
@@ -41,7 +42,8 @@ ssh -i "$SSH_KEY" -t "$SERVER" "
     # /opt/odoo is odoo:odoo 755 and docker-compose.yml is root-owned, so the
     # upload lands in /tmp and is installed from here under the same sudo.
     sudo install -m 644 -o root -g root /tmp/docker-compose.deploy.yml docker-compose.yml
-    rm -f /tmp/docker-compose.deploy.yml
+    sudo install -m 644 -o root -g root /tmp/Makefile.odoo.deploy Makefile
+    rm -f /tmp/docker-compose.deploy.yml /tmp/Makefile.odoo.deploy
     sudo sed -i 's/^ODOO_TAG=.*/ODOO_TAG=$SHA/' .env
     make pull
     make upgrade

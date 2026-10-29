@@ -1,6 +1,6 @@
 {
     'name': 'ITLingo Website & Portal',
-    'version': '19.0.1.11.0',
+    'version': '19.0.1.12.0',
     'category': 'Website',
     'summary': 'Public website and authenticated portal for ITLingo Cloud',
     'description': """
@@ -12,8 +12,7 @@ and workspaces.
     'depends': [
         'website', 'portal', 'mail', 'project',
         'auth_totp_portal', 'auth_passkey_portal',
-        'itlingo_organizations', 'itlingo_workspace_access',
-        'itlingo_documents', 'itlingo_dsl',
+        'itlingo_core', 'itlingo_dsl',
     ],
     'data': [
         'views/website_menus.xml',
