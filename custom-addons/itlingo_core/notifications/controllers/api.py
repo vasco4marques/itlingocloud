@@ -42,9 +42,10 @@ class ITLingoNotificationAPI(http.Controller):
     @http.route('/itlingo/notifications/invitation/respond', type='jsonrpc',
                 auth='user', website=True)
     def invitation_respond(self, notification_id, action, **kw):
-        Notif = request.env['itlingo.notification'].sudo()
-        notif = Notif.browse(notification_id)
-        if not notif.exists() or notif.user_id.id != request.uid:
+        notif = request.env['itlingo.notification'].search([
+            ('id', '=', notification_id), ('user_id', '=', request.uid),
+        ])
+        if not notif:
             return {'error': 'Notification not found.'}
 
         if action not in ('accept', 'reject'):
@@ -70,11 +71,11 @@ class ITLingoNotificationAPI(http.Controller):
     @http.route('/itlingo/notifications/mark_read', type='jsonrpc',
                 auth='user', website=True)
     def mark_read(self, notification_id=None, **kw):
-        Notif = request.env['itlingo.notification'].sudo()
+        Notif = request.env['itlingo.notification']
         if notification_id:
-            notif = Notif.browse(notification_id)
-            if notif.exists() and notif.user_id.id == request.uid:
-                notif.action_mark_read()
+            Notif.search([
+                ('id', '=', notification_id), ('user_id', '=', request.uid),
+            ]).action_mark_read()
         else:
             Notif.search([
                 ('user_id', '=', request.uid),

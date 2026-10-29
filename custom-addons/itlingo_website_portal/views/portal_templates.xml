@@ -611,4 +611,49 @@
         </div>
     </template>
 
+    <!-- Landing of the emailed invitation proof link (/itlingo/invitation).
+         GET only shows; the grant is the CSRF-protected POST below. -->
+    <template id="portal_invitation_confirm" name="Invitation confirmation">
+        <t t-call="website.layout">
+            <div class="container py-5" style="max-width: 640px;">
+                <h2>Invitation to ITLingo Cloud</h2>
+                <t t-if="state == 'invalid'">
+                    <div class="alert alert-danger" role="alert">
+                        This invitation link is not valid. It was already used, it
+                        expired, or it was replaced. Ask the manager to invite you again.
+                    </div>
+                </t>
+                <t t-else="">
+                    <p>Invitation for <strong t-out="invited_email"/>:</p>
+                    <ul>
+                        <li t-foreach="invitations" t-as="inv">
+                            <t t-out="inv.organization_id.name or inv.project_id.name"/>
+                            (<t t-out="{'org_manager': 'Organization Manager', 'org_member': 'Organization Member', 'doc_manager': 'Document Manager', 'ws_manager': 'Workspace Manager', 'ws_member': 'Workspace Member'}.get(inv.role, inv.role)"/>)
+                        </li>
+                    </ul>
+                    <t t-if="state == 'confirm'">
+                        <form action="/itlingo/invitation/accept" method="post">
+                            <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                            <input type="hidden" name="token" t-att-value="token"/>
+                            <button type="submit" class="btn btn-primary">Accept invitation</button>
+                        </form>
+                    </t>
+                    <t t-if="state == 'wrong_account'">
+                        <div class="alert alert-warning" role="alert">
+                            You are signed in with an account that does not use this
+                            email address. Sign in with the account of
+                            <strong t-out="invited_email"/>, or create an account.
+                        </div>
+                        <a t-att-href="logout_url" class="btn btn-primary">Sign in with another account</a>
+                    </t>
+                    <t t-if="state == 'visitor'">
+                        <p>Sign in with the account of this email address, or create an account.</p>
+                        <a t-att-href="login_url" class="btn btn-primary">Sign in</a>
+                        <a t-att-href="signup_url" class="btn btn-secondary">Create account</a>
+                    </t>
+                </t>
+            </div>
+        </t>
+    </template>
+
 </odoo>

@@ -4,6 +4,9 @@ import posixpath
 
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
+from odoo.tools import clean_context
+
+from .itlingo_dsl import context_default_values
 
 DSL_FILE_TYPES = [
     ("grammar", "Grammar"),
@@ -25,6 +28,10 @@ STRUCTURAL_FILE_LABELS = {
     "grammar": "grammar",
     "services": "services",
 }
+
+# Private marker for batch edits that compile once at the end. Context values
+# from clients are plain JSON, so they can never be this object.
+_SKIP_SERVICES_COMPILE = object()
 
 
 class ItlingoDslFile(models.Model):
@@ -278,14 +285,30 @@ class ItlingoDslFile(models.Model):
     # Structural workspace invariants
     # ------------------------------------------------------------------
 
+    def _without_services_compile(self):
+        """Return ``self`` for a batch edit whose caller compiles once after.
+
+        The caller must call ``itlingo.dsl._run_services_compilation()`` on
+        every affected DSL when the batch completes.
+        """
+        return self.with_context(skip_services_compile=_SKIP_SERVICES_COMPILE)
+
+    def _skips_services_compile(self):
+        return (
+            self.env.context.get("skip_services_compile")
+            is _SKIP_SERVICES_COMPILE
+        )
+
     @api.model
     def _record_services_audit(self, events):
         """Create immutable audit rows for completed services mutations."""
         if not events:
             return
         actor_id = self.env.user.id
+        # Drop caller ``default_*`` keys (for example a forged event_time):
+        # audit rows are written as superuser from server values only.
         Audit = self.env["itlingo.dsl.services.audit"].sudo().with_context(
-            allow_services_audit_create=True,
+            clean_context(self.env.context), allow_services_audit_create=True,
         )
         vals_list = []
         for event in events:
@@ -333,7 +356,10 @@ class ItlingoDslFile(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        vals_list = [dict(vals) for vals in vals_list]
+        # Include caller ``default_<field>`` context keys so the draft and
+        # path guards below see the DSL and file type the ORM will store.
+        context_defaults = context_default_values(self)
+        vals_list = [{**context_defaults, **vals} for vals in vals_list]
         dsl_ids = {vals.get("dsl_id") for vals in vals_list if vals.get("dsl_id")}
         dsls = self.env["itlingo.dsl"].browse(dsl_ids)
         dsl_by_id = {dsl.id: dsl for dsl in dsls}
@@ -365,7 +391,7 @@ class ItlingoDslFile(models.Model):
         records = super().create(vals_list)
         records.dsl_id._check_grammar_files()
         records.dsl_id._sync_kb_files()
-        if not self.env.context.get("skip_services_compile"):
+        if not self._skips_services_compile():
             for dsl in records.filtered(
                 lambda item: item.file_type == "services"
             ).dsl_id:
@@ -437,10 +463,14 @@ class ItlingoDslFile(models.Model):
             vals["file_name"] = posixpath.basename(path)
         dsls = self.dsl_id
         result = super().write(vals)
+        if "dsl_id" in vals:
+            # Record rules are checked on the old DSL before writing; the new
+            # DSL must be writable too, so files cannot be moved elsewhere.
+            self.check_access("write")
         affected_dsls = dsls | self.dsl_id
         affected_dsls._check_grammar_files()
         affected_dsls._sync_kb_files()
-        if compile_services and not self.env.context.get("skip_services_compile"):
+        if compile_services and not self._skips_services_compile():
             services_after = self.filtered(
                 lambda item: item.file_type == "services"
             )
@@ -476,7 +506,7 @@ class ItlingoDslFile(models.Model):
         result = super().unlink()
         dsls._check_grammar_files()
         dsls._sync_kb_files()
-        if not self.env.context.get("skip_services_compile"):
+        if not self._skips_services_compile():
             for dsl in services_dsls:
                 dsl._run_services_compilation()
         self._record_services_audit(audit_events)

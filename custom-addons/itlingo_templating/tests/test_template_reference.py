@@ -1,7 +1,8 @@
 import json
 from unittest.mock import patch
 
-from odoo.tests import TransactionCase, tagged
+from odoo.exceptions import AccessError
+from odoo.tests import TransactionCase, new_test_user, tagged
 
 from odoo.addons.itlingo_dsl.services import grammar_describe
 
@@ -197,3 +198,19 @@ class TestTemplateReference(TransactionCase):
         self.assertFalse(self.env.ref(
             "itlingo_dsl.dsl_asl_1_0", raise_if_not_found=False,
         ))
+
+    def test_context_default_cannot_seed_template_cache(self):
+        maintainer = new_test_user(
+            self.env, login="templating_cache_maintainer",
+            groups="base.group_portal,itlingo_core.group_itlingo_member",
+        )
+        self.dsl.family_id.sudo().write({
+            "maintainer_ids": [(4, maintainer.id)],
+        })
+        Dsl = self.env["itlingo.dsl"].with_user(maintainer)
+        with self.assertRaisesRegex(AccessError, "managed by the server"):
+            Dsl.with_context(
+                default_template_reference_json=json.dumps(inventory()),
+            ).create({
+                "family_id": self.dsl.family_id.id, "version": "test-2.0",
+            })

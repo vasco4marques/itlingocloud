@@ -47,7 +47,9 @@ class ItlingoDslServicesAudit(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        if not self.env.context.get("allow_services_audit_create"):
+        # The flag is set only by itlingo.dsl.file under sudo; a client
+        # supplying it through RPC context is not trusted.
+        if not (self.env.su and self.env.context.get("allow_services_audit_create")):
             raise AccessError(_("Services audit rows can only be created internally."))
         return super().create(vals_list)
 

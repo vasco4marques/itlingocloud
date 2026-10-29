@@ -6,6 +6,7 @@ import re
 
 from odoo import api, fields, models, _
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.tools import clean_context
 
 from ..services import grammar_flattener, grammar_validator, services_compiler
 
@@ -20,6 +21,19 @@ DRAFT_EXTENSION_SUFFIX = "-draft"
 # versions contribute their plain extension only when no active or draft sibling
 # in the same family provides that extension.
 IMPORTABLE_DSL_STATES = ("active", "draft", "deprecated")
+
+
+def context_default_values(model):
+    """Return the field defaults a caller supplies as ``default_<field>`` keys.
+
+    The ORM applies these to ``create`` values, so create guards must check
+    them together with the explicit values.
+    """
+    return {
+        key[len("default_"):]: value
+        for key, value in model.env.context.items()
+        if key.startswith("default_") and key[len("default_"):] in model._fields
+    }
 
 
 def _read_attachment_base64(env, res_model, res_id, field_name):
@@ -103,8 +117,12 @@ class ItlingoDsl(models.Model):
         string="Documentation URL",
     )
 
+    # Backend-only (the portal never renders it), so administrators only.
+    # Forks carry it over in action_create_draft_version.
     notes = fields.Text(
         string="Internal Notes",
+        groups="itlingo_core.group_itlingo_admin",
+        copy=False,
     )
 
     maintainer_ids = fields.Many2many(
@@ -135,6 +153,7 @@ class ItlingoDsl(models.Model):
         string="Services Edit Audit",
         readonly=True,
         copy=False,
+        groups="itlingo_core.group_itlingo_admin",
     )
 
     # ------------------------------------------------------------------
@@ -173,6 +192,7 @@ class ItlingoDsl(models.Model):
         string="Services Compile Diagnostics",
         readonly=True,
         copy=False,
+        groups="itlingo_core.group_itlingo_admin",
         help="Structured diagnostics from the last services compilation attempt.",
     )
 
@@ -225,6 +245,7 @@ class ItlingoDsl(models.Model):
         string="Validation Diagnostics",
         readonly=True,
         copy=False,
+        groups="itlingo_core.group_itlingo_admin",
         help="JSON list of {severity, message, line, column, code} from the "
              "last server-side validation.",
     )
@@ -262,24 +283,50 @@ class ItlingoDsl(models.Model):
     )
 
     # ------------------------------------------------------------------
-    # Maintainership helpers
+    # Authorization helpers
     # ------------------------------------------------------------------
     @api.model
-    def _dsls_maintained_by(self, user):
-        """DSLs the given user maintains.
+    def _system_managed_fields(self):
+        """Audit/artifact fields that only trusted server code may write.
 
-        Maintainers are the users allowed to manage a DSL (metadata and
-        definition files) through the portal.
+        They are written under ``sudo()`` by the validation, compilation and
+        publication paths after those paths checked the caller's access.
         """
-        if not user:
-            return self.browse()
-        return self.sudo().search(
-            [("maintainer_ids", "in", user.ids)], order="acronym",
-        )
+        return {
+            "services_source_digest", "services_compiled",
+            "services_compiled_digest", "services_compile_result",
+            "services_compile_diagnostics", "services_compile_time",
+            "grammar_validation_result", "grammar_validation_digest",
+            "grammar_validation_time", "grammar_validator_version",
+            "grammar_validation_diagnostics",
+            "published_by_id", "published_at", "published_digest",
+            "services_audit_ids",
+        }
 
-    def _is_maintained_by(self, user):
+    def _check_system_managed_vals(self, vals):
+        if self.env.su:
+            return
+        forbidden = sorted(set(vals) & self._system_managed_fields())
+        if forbidden:
+            raise AccessError(_(
+                "These DSL fields are managed by the server: %s",
+                ", ".join(forbidden),
+            ))
+
+    def _authoring_diagnostics(self, field_name):
+        """Read an admin-only diagnostics field for this DSL's authors.
+
+        Diagnostics are stored admin-only so maintainer group membership
+        does not expose other families. Users who may write this DSL (its
+        family maintainers and administrators) get the value.
+        """
         self.ensure_one()
-        return bool(user) and user in self.maintainer_ids
+        if field_name not in (
+            "grammar_validation_diagnostics", "services_compile_diagnostics",
+        ):
+            raise ValueError(field_name)
+        self.check_access("write")
+        return self.sudo()[field_name]
 
     # ------------------------------------------------------------------
     # File extensions
@@ -457,7 +504,7 @@ class ItlingoDsl(models.Model):
 
     def _clear_services_compilation(self):
         """Clear compiled state when a DSL has no services workspace."""
-        self.write({
+        self.sudo().write({
             "services_source_digest": False,
             "services_compiled": False,
             "services_compiled_digest": False,
@@ -471,9 +518,11 @@ class ItlingoDsl(models.Model):
 
         Compilation errors, including unavailable infrastructure, are stored as
         diagnostics instead of rejecting a draft save. Publication separately
-        enforces a successful, current artifact.
+        enforces a successful, current artifact. The caller must be allowed
+        to write this DSL; the audited artifact itself is stored as superuser.
         """
         self.ensure_one()
+        self.check_access("write")
         services = self._services_files()
         if not services:
             self._clear_services_compilation()
@@ -515,7 +564,7 @@ class ItlingoDsl(models.Model):
             if artifact else False
         )
         diagnostics = list(result.get("diagnostics") or [])
-        self.write({
+        self.sudo().write({
             "services_source_digest": source_digest,
             "services_compiled": artifact or False,
             "services_compiled_digest": artifact_digest,
@@ -537,7 +586,7 @@ class ItlingoDsl(models.Model):
 
     def _services_compile_error_summary(self):
         self.ensure_one()
-        diagnostics = self.services_compile_diagnostics or []
+        diagnostics = self._authoring_diagnostics("services_compile_diagnostics") or []
         errors = [d for d in diagnostics if d.get("severity") == "error"]
         lines = [
             _("%(path)s:%(line)s:%(column)s: %(message)s",
@@ -630,9 +679,11 @@ class ItlingoDsl(models.Model):
         """Validate the grammar server-side and store the audited result.
 
         Publication relies on this stored result plus the content digest; a
-        browser-supplied validity flag is never consulted.
+        browser-supplied validity flag is never consulted. The caller must be
+        allowed to write this DSL; the audited result is stored as superuser.
         """
         self.ensure_one()
+        self.check_access("write")
         if not self._grammar_files():
             raise UserError(_("This DSL has no grammar file to validate."))
         try:
@@ -660,7 +711,7 @@ class ItlingoDsl(models.Model):
                 "column": 1,
                 "code": "unreachable-grammar-file",
             })
-        self.write({
+        self.sudo().write({
             "grammar_validation_result": "valid" if result["valid"] else "invalid",
             "grammar_validation_digest": self._grammar_digest(),
             "grammar_validation_time": fields.Datetime.now(),
@@ -672,7 +723,9 @@ class ItlingoDsl(models.Model):
     def _grammar_validation_error_summary(self):
         self.ensure_one()
         try:
-            diagnostics = json.loads(self.grammar_validation_diagnostics or "[]")
+            diagnostics = json.loads(
+                self._authoring_diagnostics("grammar_validation_diagnostics") or "[]"
+            )
         except json.JSONDecodeError:
             diagnostics = []
         errors = [d for d in diagnostics if d.get("severity") == "error"]
@@ -757,25 +810,20 @@ class ItlingoDsl(models.Model):
 
     def action_validate_draft(self):
         """Run current grammar and services checks without publishing."""
-        if not self.env.user.has_group(
-            "itlingo_core.group_itlingo_admin"
-        ):
-            unauthorized = self.filtered(
-                lambda dsl: not dsl._is_maintained_by(self.env.user)
-            )
-            if unauthorized:
-                raise AccessError(_(
-                    "Only platform administrators or family maintainers can "
-                    "validate draft versions.",
-                ))
+        try:
+            self.check_access("write")
+        except AccessError as err:
+            raise AccessError(_(
+                "Only platform administrators or family maintainers can "
+                "validate draft versions.",
+            )) from err
         for dsl in self:
             if dsl.status != "draft":
                 raise UserError(_("Only draft versions can be validated."))
-            target = dsl.sudo()
-            if target._grammar_file():
-                target._run_grammar_validation()
-            if target._services_files():
-                target._run_services_compilation()
+            if dsl._grammar_file():
+                dsl._run_grammar_validation()
+            if dsl._services_files():
+                dsl._run_services_compilation()
         return True
 
     def action_publish(self):
@@ -805,11 +853,13 @@ class ItlingoDsl(models.Model):
             if dsl._services_files():
                 dsl._run_services_compilation()
             dsl._ensure_grammar_publishable()
-            previous = dsl._active_acronym_sibling()
-            previous.with_context(allow_dsl_lifecycle_write=True).write(
-                {"status": "deprecated"},
-            )
-            dsl.with_context(allow_dsl_lifecycle_write=True).write({
+            # The lifecycle context is honoured only under sudo, so callers
+            # cannot bypass this action by supplying it themselves.
+            lifecycle = dsl.sudo().with_context(allow_dsl_lifecycle_write=True)
+            lifecycle._active_acronym_sibling().with_context(
+                allow_dsl_lifecycle_write=True,
+            ).write({"status": "deprecated"})
+            lifecycle.write({
                 "status": "active",
                 "published_by_id": self.env.uid,
                 "published_at": fields.Datetime.now(),
@@ -842,6 +892,8 @@ class ItlingoDsl(models.Model):
         immutable and iteration happens on the new draft.
         """
         self.ensure_one()
+        # Only maintainers of this family (or admins) may fork its versions.
+        self.check_access("write")
         version = (new_version or self._suggest_next_version()).strip()
         if not version:
             raise ValidationError(_("A version is required for the new draft."))
@@ -850,6 +902,10 @@ class ItlingoDsl(models.Model):
             "version": version,
             "status": "draft",
         })
+        # Admin-only notes stay with the family's versions without being
+        # exposed to the maintainer who forks them.
+        if self.sudo().notes:
+            draft.sudo().notes = self.sudo().notes
 
         # One2many fields are not copied by copy(); carry the definition
         # files (including the grammar) over to the new draft explicitly.
@@ -887,10 +943,30 @@ class ItlingoDsl(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         family_model = self.env["itlingo.dsl.family"]
+        is_admin = self.env.su or self.env.user.has_group(
+            "itlingo_core.group_itlingo_admin",
+        )
         prepared = []
         active_family_ids = set()
+        # Guards check the values the ORM will really store, including
+        # caller-supplied ``default_<field>`` context keys.
+        context_defaults = context_default_values(self)
+        if not self.env.su:
+            for name in context_defaults:
+                groups = self._fields[name].groups
+                if groups and not self.env.user.has_groups(groups):
+                    raise AccessError(_(
+                        "Only platform administrators can set the default value of '%s'.",
+                        name,
+                    ))
         for incoming in vals_list:
-            vals = dict(incoming)
+            vals = {**context_defaults, **incoming}
+            self._check_system_managed_vals(vals)
+            if not is_admin and vals.get("status", "draft") != "draft":
+                raise AccessError(_(
+                    "Only platform administrators can create non-draft DSL "
+                    "versions.",
+                ))
             family_id = vals.get("family_id")
             family = family_model.browse(family_id).exists() if family_id else family_model.browse()
             if family_id and not family:
@@ -898,6 +974,10 @@ class ItlingoDsl(models.Model):
             if not family:
                 family = family_model._find_or_create_for_version(vals)
                 vals["family_id"] = family.id
+            if not is_admin and self.env.user not in family.sudo().maintainer_ids:
+                raise AccessError(_(
+                    "Only maintainers of the DSL family can create its versions.",
+                ))
             vals["name"] = family.name
             vals["acronym"] = family.acronym
             if vals.get("status") == "active":
@@ -916,6 +996,7 @@ class ItlingoDsl(models.Model):
         return records
 
     def write(self, vals):
+        self._check_system_managed_vals(vals)
         if {"name", "acronym"} & set(vals):
             raise ValidationError(_(
                 "A DSL version's name and acronym belong to its family.",
@@ -931,8 +1012,10 @@ class ItlingoDsl(models.Model):
             "status" in vals
             and self.filtered(lambda dsl: dsl.status != vals["status"])
         )
-        if changing_status and not self.env.context.get(
-            "allow_dsl_lifecycle_write"
+        # Only server code running as superuser (action_publish) may use the
+        # lifecycle context; a client-supplied context is ignored.
+        if changing_status and not (
+            self.env.su and self.env.context.get("allow_dsl_lifecycle_write")
         ):
             if vals["status"] == "active":
                 self.filtered(
@@ -1011,6 +1094,11 @@ class ItlingoDsl(models.Model):
         if kb_file_model is None or kb_lang_model is None:
             _logger.info("Chatbot KB models unavailable - skipping DSL KB sync")
             return
+        # KB rows are written as superuser: drop caller ``default_*`` keys so
+        # they cannot fill KB fields that the values below leave unset.
+        context = clean_context(self.env.context)
+        kb_file_model = kb_file_model.with_context(context)
+        kb_lang_model = kb_lang_model.with_context(context)
 
         for dsl in self:
             lang_name = (dsl.acronym or "").strip()

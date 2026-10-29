@@ -8,19 +8,27 @@ from urllib.parse import urlencode
 
 from werkzeug.utils import redirect as wz_redirect
 
-from odoo import http
+from odoo import fields, http
 from odoo.addons.itlingo_dsl.services.grammar_flattener import GrammarFlattenError
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.http import request, Response
 
 _logger = logging.getLogger(__name__)
 
 WRITE_ROLES = ('ws_manager', 'doc_manager')
+ADMIN_GROUP = 'itlingo_core.group_itlingo_admin'
 _PACKAGE_NAMESPACE_RE = re.compile(
     r'^[ \t]*Package[ \t]+'
     r'([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\b',
     re.MULTILINE,
 )
+
+
+def _json_error(message, status):
+    return Response(
+        json.dumps({'error': message}),
+        status=status, content_type='application/json',
+    )
 
 
 class ITLingoIntegrationAPI(http.Controller):
@@ -29,206 +37,113 @@ class ITLingoIntegrationAPI(http.Controller):
     # ITOI redirect (replaces Django's generate-itoi-env/<project_id>)
     # ------------------------------------------------------------------
 
+    def _redirect_to_itoi(self, user, project, write, public=False):
+        settings = request.env['itlingo.integration.settings'].sudo()._get_settings()
+        itoi_url = (settings.itoi_url or 'http://localhost:3000/').rstrip('/')
+        iv_b64, ct_b64 = request.env[
+            'itlingo.integration.token'
+        ]._issue_launch_token(user, project, write, public=public)
+        _logger.info(
+            'ITOI launch: user=%s project=%s write=%s public=%s',
+            user.login, project.id, write, public,
+        )
+        # Never log the target URL: its query string is the bearer token.
+        qs = urlencode({'iv': iv_b64, 't': ct_b64})
+        return wz_redirect(f'{itoi_url}/createTempWorkspace?{qs}', code=302)
+
     @http.route(
         '/itoi/launch/<int:project_id>',
         type='http', auth='user', website=True,
     )
     def itoi_launch(self, project_id, **kw):
-        """Encrypt user/project info and redirect the browser to ITOI's
-        ``/createTempWorkspace?iv=…&t=…`` endpoint — same flow the old
-        Django view used."""
-        settings = request.env['itlingo.integration.settings'].sudo()._get_settings()
-        itoi_url = (settings.itoi_url or 'http://localhost:3000/').rstrip('/')
+        """Launch ITOI for a workspace member or platform admin.
 
+        Write access in ITOI follows the member's accepted workspace role.
+        Non-members of a public workspace are sent to the read-only launch.
+        """
         project = request.env['itlingo.workspace'].sudo().browse(project_id)
         if not project.exists():
             return request.not_found()
 
         user = request.env.user
-        role_rec = request.env['itlingo.project.role'].sudo().search([
-            ('user_id', '=', user.id),
-            ('project_id', '=', project_id),
-            ('state', '=', 'accepted'),
-        ], limit=1)
-
-        has_write = role_rec.role in WRITE_ROLES if role_rec else False
-
-        org_name = project.organization_id.name if project.organization_id else ''
-
-        payload = json.dumps({
-            'user': user.login,
-            'workspace': project.name,
-            'organization': org_name,
-            'write': has_write,
-            'wsid': project.id,
-        })
-
-        iv_b64, ct_b64 = settings._aes_encrypt(payload)
-
-        _logger.info(
-            'ITOI launch: user=%s project=%s iv_len=%d ct_len=%d key_len=%d',
-            user.login, project.name, len(iv_b64), len(ct_b64),
-            len(settings.encryption_key or ''),
-        )
-
-        qs = urlencode({'iv': iv_b64, 't': ct_b64})
-        target = f'{itoi_url}/createTempWorkspace?{qs}'
-        _logger.info('ITOI redirect target: %s', target)
-        return wz_redirect(target, code=302)
+        role = project._itlingo_user_role(user)
+        if not role and not user.has_group(ADMIN_GROUP):
+            if project.is_public_workspace:
+                return request.redirect(f'/itoi/launch/public/{project_id}')
+            return request.not_found()
+        return self._redirect_to_itoi(user, project, role.role in WRITE_ROLES)
 
     @http.route(
         '/itoi/launch/public/<int:project_id>',
         type='http', auth='public', website=True,
     )
     def itoi_launch_public(self, project_id, **kw):
-        """Read-only ITOI launch for visitors to public workspaces (no membership)."""
-        settings = request.env['itlingo.integration.settings'].sudo()._get_settings()
-        itoi_url = (settings.itoi_url or 'http://localhost:3000/').rstrip('/')
+        """Read-only ITOI launch of a public workspace.
 
+        The token is public-scoped for every user, members included: it reads
+        only the published documents of this workspace.
+        """
         project = request.env['itlingo.workspace'].sudo().browse(project_id)
         if not project.exists() or not project.is_public_workspace:
             return request.not_found()
-
-        user = request.env.user
-        org_name = project.organization_id.name if project.organization_id else ''
-
-        payload = json.dumps({
-            'user': user.login,
-            'workspace': project.name,
-            'organization': org_name,
-            'write': False,
-            'wsid': project.id,
-        })
-
-        iv_b64, ct_b64 = settings._aes_encrypt(payload)
-
-        _logger.info(
-            'ITOI public launch: user=%s project=%s',
-            user.login, project.name,
-        )
-
-        qs = urlencode({'iv': iv_b64, 't': ct_b64})
-        target = f'{itoi_url}/createTempWorkspace?{qs}'
-        return wz_redirect(target, code=302)
+        return self._redirect_to_itoi(
+            request.env.user, project, False, public=True)
 
     # ------------------------------------------------------------------
-    # Bearer-token helpers (for REST API endpoints)
+    # Token helpers (REST API and ITOI document import endpoints)
     # ------------------------------------------------------------------
 
-    def _validate_bearer_token(self):
-        """Extract iv + ct from the Authorization header and validate."""
-        auth_header = request.httprequest.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
-            return None, Response(
-                json.dumps({'error': 'Missing or invalid Authorization header'}),
-                status=401, content_type='application/json',
-            )
-        raw = auth_header[7:]
-        parts = raw.split(':', 1)
-        if len(parts) != 2:
-            return None, Response(
-                json.dumps({'error': 'Token must be iv:ciphertext (base64url)'}),
-                status=401, content_type='application/json',
-            )
-        iv_b64, ct_b64 = parts
-        try:
-            payload = request.env['itlingo.integration.token'].sudo()._validate_token(iv_b64, ct_b64)
-        except Exception as e:
-            return None, Response(
-                json.dumps({'error': str(e)}),
-                status=401, content_type='application/json',
-            )
-        return payload, None
+    def _validate_token_header(self, kind):
+        """Validate ``Authorization: Bearer <iv>:<ciphertext>``.
 
-    # ------------------------------------------------------------------
-    # Launch-token helpers (for ITOI document import endpoints)
-    # ------------------------------------------------------------------
-
-    def _validate_launch_token(self):
-        """Decrypt the ITOI launch token forwarded by the ITOI backend.
-
-        ITOI holds the AES-encrypted launch payload in its session and
-        forwards it as ``Authorization: Bearer <iv>:<ciphertext>``. Unlike
-        :meth:`_validate_bearer_token`, this token is not persisted as an
-        ``itlingo.integration.token`` record; it is the same payload produced
-        by :meth:`itoi_launch`, so we only need to decrypt it.
-
-        Returns ``(payload, None)`` or ``(None, Response)`` on error.
+        Returns ``(token, payload, None)`` or ``(None, None, Response)``. The
+        principal is ``token.user_id``; it is resolved from the persisted
+        authorization, never from the request context or the payload.
         """
         auth_header = request.httprequest.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
-            return None, Response(
-                json.dumps({'error': 'Missing or invalid Authorization header'}),
-                status=401, content_type='application/json',
-            )
-        raw = auth_header[7:]
-        parts = raw.split(':', 1)
+            return None, None, _json_error(
+                'Missing or invalid Authorization header', 401)
+        parts = auth_header[7:].split(':', 1)
         if len(parts) != 2:
-            return None, Response(
-                json.dumps({'error': 'Token must be iv:ciphertext (base64url)'}),
-                status=401, content_type='application/json',
-            )
-        iv_b64, ct_b64 = parts
-        settings = request.env['itlingo.integration.settings'].sudo()._get_settings()
+            return None, None, _json_error(
+                'Token must be iv:ciphertext (base64url)', 401)
         try:
-            decrypted = settings._aes_decrypt(iv_b64, ct_b64)
-            payload = json.loads(decrypted)
-        except Exception:
-            return None, Response(
-                json.dumps({'error': 'Invalid token'}),
-                status=401, content_type='application/json',
-            )
-        return payload, None
+            token, payload = request.env[
+                'itlingo.integration.token'
+            ].sudo()._resolve_token(parts[0], parts[1], kind)
+        except UserError as e:
+            return None, None, _json_error(str(e), 401)
+        return token, payload, None
 
-    def _check_workspace_access(self, payload, workspace_id):
-        """Resolve the project for *workspace_id* and verify the token's user
-        is allowed to access it.
+    def _launch_documents(self, token, workspace_id):
+        """Return ``(project, documents, None)`` for a launch token.
 
-        Access is granted when the user has an ``accepted`` workspace role on
-        the project, or the project is a public workspace.
-
-        Returns ``(project, None)`` or ``(None, Response)`` on error.
+        *documents* (sudo) are the workspace and organization documents the
+        token may read. A public-scoped token reads only the published
+        documents of its (still public) workspace, whoever the user is. A
+        private token reads what the ``itlingo.document`` access rules allow
+        its user; ``_resolve_token`` already rechecked the user's role.
         """
+        project = token.project_id
+        if project.id != workspace_id:
+            return None, None, _json_error('Workspace mismatch', 403)
+        Document = request.env['itlingo.document']
+        if token.public_scope:
+            return project, Document.sudo().search([
+                ('project_id', '=', project.id),
+                ('status', '=', 'published'),
+            ]), None
+        org = project.organization_id
+        domain = [('project_id', '=', project.id)]
+        if org:
+            domain = ['|', *domain, ('organization_id', '=', org.id)]
+        Document = Document.with_user(token.user_id)
         try:
-            wsid = int(payload.get('wsid'))
-        except (TypeError, ValueError):
-            return None, Response(
-                json.dumps({'error': 'Token does not carry a workspace id'}),
-                status=401, content_type='application/json',
-            )
-        if wsid != workspace_id:
-            return None, Response(
-                json.dumps({'error': 'Workspace mismatch'}),
-                status=403, content_type='application/json',
-            )
-
-        project = request.env['itlingo.workspace'].sudo().browse(wsid)
-        if not project.exists():
-            return None, Response(
-                json.dumps({'error': 'Workspace not found'}),
-                status=404, content_type='application/json',
-            )
-
-        user = request.env['res.users'].sudo().search(
-            [('login', '=', payload.get('user'))], limit=1,
-        )
-        if not user:
-            return None, Response(
-                json.dumps({'error': 'Unknown user'}),
-                status=401, content_type='application/json',
-            )
-
-        has_role = request.env['itlingo.project.role'].sudo().search_count([
-            ('user_id', '=', user.id),
-            ('project_id', '=', project.id),
-            ('state', '=', 'accepted'),
-        ])
-        if not has_role and not project.is_public_workspace:
-            return None, Response(
-                json.dumps({'error': 'You do not have access to this workspace'}),
-                status=403, content_type='application/json',
-            )
-        return project, None
+            Document.check_access('read')
+        except AccessError:
+            return project, Document.sudo().browse(), None
+        return project, Document.search(domain).sudo(), None
 
     @staticmethod
     def _file_extension(file_name):
@@ -244,7 +159,7 @@ class ITLingoIntegrationAPI(http.Controller):
     @http.route('/api/itlingo/v1/whoami', type='http', auth='none',
                 methods=['GET'], csrf=False)
     def api_whoami(self, **kw):
-        payload, error_resp = self._validate_bearer_token()
+        token, payload, error_resp = self._validate_token_header('api')
         if error_resp:
             return error_resp
         return Response(
@@ -260,15 +175,17 @@ class ITLingoIntegrationAPI(http.Controller):
     @http.route('/api/itlingo/v1/projects', type='http', auth='none',
                 methods=['GET'], csrf=False)
     def api_projects(self, **kw):
-        payload, error_resp = self._validate_bearer_token()
+        token, payload, error_resp = self._validate_token_header('api')
         if error_resp:
             return error_resp
 
-        user_id = payload.get('user_id')
-        projects = request.env['itlingo.workspace'].sudo().search([
-            ('workspace_role_ids.user_id', '=', user_id),
-            ('workspace_role_ids.state', '=', 'accepted'),
-        ])
+        domain = [('workspace_role_ids', 'any', [
+            ('user_id', '=', token.user_id.id),
+            ('state', '=', 'accepted'),
+        ])]
+        if token.project_id:
+            domain.append(('id', '=', token.project_id.id))
+        projects = request.env['itlingo.workspace'].sudo().search(domain)
 
         data = [{
             'id': p.id,
@@ -285,12 +202,17 @@ class ITLingoIntegrationAPI(http.Controller):
         project_id = kw.get('project_id')
         description = kw.get('description', 'API Token')
 
-        token_rec = request.env['itlingo.integration.token'].create({
-            'user_id': request.uid,
-            'project_id': int(project_id) if project_id else False,
-            'description': description,
-        })
-        token_rec.action_generate_token()
+        try:
+            token_rec = request.env['itlingo.integration.token'].create({
+                'user_id': request.uid,
+                'project_id': int(project_id) if project_id else False,
+                'description': description,
+            })
+            token_rec.action_generate_token()
+        except ValueError:
+            return _json_error('Invalid project_id', 400)
+        except AccessError as e:
+            return _json_error(str(e), 403)
 
         return Response(
             json.dumps({
@@ -305,15 +227,51 @@ class ITLingoIntegrationAPI(http.Controller):
     # ITOI document import endpoints (token_api)
     # ------------------------------------------------------------------
 
-    def _importable_workspace_documents(self, project):
-        """Return the documents of *project* and its organization that are
-        importable (whitelisted extension and have file content)."""
+    @http.route('/token_api/validate-launch', type='http', auth='none',
+                methods=['GET'], csrf=False)
+    def token_api_validate_launch(self, **kw):
+        """Revalidate a forwarded ITOI launch token.
+
+        ITOI calls this before it creates a workspace and before each
+        token-authorized write, because decrypting the token proves only
+        that ITLingo Cloud issued it, not that it is still valid. The token
+        must have a persisted, active, unexpired row and its user must still
+        hold the access it was issued for (see ``_resolve_token``).
+
+        200: the original launch payload ``{user, workspace, organization,
+        write, wsid}`` plus ``public`` (public-scoped, read-only launch) and
+        ``expires_at`` (UTC, ``YYYY-MM-DD HH:MM:SS``).
+        401: ``{error}``; ITOI must refuse the operation and ask the user to
+        relaunch from ITLingo Cloud.
+        """
+        # Access is rechecked on every call; never let a cache answer it.
+        no_store = [
+            ('Cache-Control', 'no-store'),
+            ('Vary', 'Authorization'),
+        ]
+        token, payload, error_resp = self._validate_token_header('launch')
+        if error_resp:
+            error_resp.headers.extend(no_store)
+            return error_resp
+        return Response(
+            json.dumps({
+                'user': payload.get('user'),
+                'workspace': payload.get('workspace'),
+                'organization': payload.get('organization'),
+                'write': token.launch_write,
+                'wsid': token.project_id.id,
+                'public': token.public_scope,
+                'expires_at': fields.Datetime.to_string(token.expires_at),
+            }),
+            content_type='application/json',
+            headers=no_store,
+        )
+
+    def _importable_workspace_documents(self, documents):
+        """Return the *documents* that are importable (whitelisted
+        extension and have file content)."""
         settings = request.env['itlingo.integration.settings'].sudo()._get_settings()
         allowed = settings._get_importable_extensions()
-
-        documents = project.document_ids
-        if project.organization_id:
-            documents |= project.organization_id.document_ids
 
         return documents.filtered(
             lambda d: d.document_file
@@ -325,14 +283,15 @@ class ITLingoIntegrationAPI(http.Controller):
                 auth='none', methods=['GET'], csrf=False)
     def token_api_get_file_list(self, workspace_id, **kw):
         """List the importable cloud documents for a workspace (and its org)."""
-        payload, error_resp = self._validate_launch_token()
+        token, payload, error_resp = self._validate_token_header('launch')
         if error_resp:
             return error_resp
-        project, error_resp = self._check_workspace_access(payload, workspace_id)
+        project, documents, error_resp = self._launch_documents(
+            token, workspace_id)
         if error_resp:
             return error_resp
 
-        documents = self._importable_workspace_documents(project)
+        documents = self._importable_workspace_documents(documents)
         namelist = [{
             'id': doc.id,
             'name': doc.file_name,
@@ -346,7 +305,7 @@ class ITLingoIntegrationAPI(http.Controller):
 
         _logger.info(
             'ITOI get-file-list: workspace=%s user=%s files=%d',
-            workspace_id, payload.get('user'), len(namelist),
+            workspace_id, token.user_id.login, len(namelist),
         )
         return Response(
             json.dumps({'namelist': namelist}),
@@ -359,52 +318,38 @@ class ITLingoIntegrationAPI(http.Controller):
         """Return the scoped spec corpus used for cross-file DSL imports.
 
         This is deliberately narrower than a generic file API: only text from
-        documents in the requested DSL family and launch token's
-        workspace/organization is exposed, regardless of version pins.
+        documents in the requested DSL family that the launch principal may
+        see in the token's workspace/organization is exposed, regardless of
+        version pins.
         """
-        payload, error_resp = self._validate_launch_token()
+        token, payload, error_resp = self._validate_token_header('launch')
         if error_resp:
             return error_resp
-        try:
-            workspace_id = int(payload.get('wsid'))
-        except (TypeError, ValueError):
-            return Response(
-                json.dumps({'error': 'Token does not carry a workspace id'}),
-                status=401, content_type='application/json',
-            )
-        project, error_resp = self._check_workspace_access(
-            payload, workspace_id,
-        )
+        project, visible, error_resp = self._launch_documents(
+            token, token.project_id.id)
         if error_resp:
             return error_resp
 
         dsl = request.env['itlingo.dsl'].sudo().browse(dsl_id)
         if not dsl.exists() or dsl.status not in (
                 'active', 'draft', 'deprecated'):
-            return Response(
-                json.dumps({'error': 'DSL not found'}),
-                status=404, content_type='application/json',
-            )
+            return _json_error('DSL not found', 404)
         documents = request.env[
             'itlingo.document'
         ]._scoped_dsl_source_documents(
             dsl,
             project=project,
             organization=project.organization_id,
-        )
+        ) & visible
         sources = []
         for document in documents:
             raw = base64.b64decode(document.document_file)
             try:
                 text = raw.decode('utf-8')
             except UnicodeDecodeError:
-                return Response(
-                    json.dumps({
-                        'error': 'DSL source %s is not UTF-8'
-                        % (document.file_name or document.name),
-                    }),
-                    status=422, content_type='application/json',
-                )
+                return _json_error(
+                    'DSL source %s is not UTF-8'
+                    % (document.file_name or document.name), 422)
             sources.append({
                 'id': document.id,
                 'name': document.file_name or document.name,
@@ -424,7 +369,7 @@ class ITLingoIntegrationAPI(http.Controller):
 
         _logger.info(
             'ITOI get-dsl-sources: workspace=%s user=%s dsl=%s sources=%d',
-            project.id, payload.get('user'), dsl.id, len(sources),
+            project.id, token.user_id.login, dsl.id, len(sources),
         )
         return Response(
             json.dumps({'sources': sources, 'conflicting_packages': conflicts}),
@@ -435,44 +380,34 @@ class ITLingoIntegrationAPI(http.Controller):
                 type='http', auth='none', methods=['GET'], csrf=False)
     def token_api_download_file(self, workspace_id, file_id, **kw):
         """Return the binary content of an importable cloud document."""
-        payload, error_resp = self._validate_launch_token()
+        token, payload, error_resp = self._validate_token_header('launch')
         if error_resp:
             return error_resp
-        project, error_resp = self._check_workspace_access(payload, workspace_id)
+        project, visible, error_resp = self._launch_documents(
+            token, workspace_id)
         if error_resp:
             return error_resp
 
         document = request.env['itlingo.document'].sudo().browse(file_id)
         if not document.exists():
-            return Response(
-                json.dumps({'error': 'Document not found'}),
-                status=404, content_type='application/json',
-            )
+            return _json_error('Document not found', 404)
 
-        # The document must belong to this workspace or its organization.
-        belongs = document.project_id.id == project.id or (
-            project.organization_id
-            and document.organization_id.id == project.organization_id.id
-        )
-        if not belongs:
-            return Response(
-                json.dumps({'error': 'Document does not belong to this workspace'}),
-                status=403, content_type='application/json',
-            )
+        # The document must be visible to the launch principal in this
+        # workspace (or its organization).
+        if document not in visible:
+            return _json_error(
+                'Document does not belong to this workspace', 403)
 
         settings = request.env['itlingo.integration.settings'].sudo()._get_settings()
         allowed = settings._get_importable_extensions()
         if not document.document_file or \
                 self._file_extension(document.file_name) not in allowed:
-            return Response(
-                json.dumps({'error': 'File type is not importable'}),
-                status=403, content_type='application/json',
-            )
+            return _json_error('File type is not importable', 403)
 
         content = base64.b64decode(document.document_file)
         _logger.info(
             'ITOI download-file: workspace=%s user=%s file_id=%s name=%s bytes=%d',
-            workspace_id, payload.get('user'), file_id,
+            workspace_id, token.user_id.login, file_id,
             document.file_name, len(content),
         )
         return request.make_response(
@@ -485,27 +420,46 @@ class ITLingoIntegrationAPI(http.Controller):
             ],
         )
 
+    @staticmethod
+    def _visible_dsls(user):
+        """DSL versions in the registry that *user* may read.
+
+        Users with registry access read through the ``itlingo.dsl`` record
+        rules (drafts only for family maintainers and admins). Principals
+        without registry access (the anonymous public user) see the public
+        registry: active and deprecated versions of active families.
+        """
+        Dsl = request.env['itlingo.dsl'].with_user(user)
+        try:
+            Dsl.check_access('read')
+        except AccessError:
+            return Dsl.sudo().search([
+                ('status', 'in', ['active', 'deprecated']),
+                ('family_id.active', '=', True),
+            ])
+        return Dsl.search([
+            ('status', 'in', ['active', 'draft', 'deprecated']),
+        ]).sudo()
+
     @http.route('/token_api/get-dsls', type='http', auth='none',
                 methods=['GET'], csrf=False)
     def token_api_get_dsls(self, **kw):
         """List DSLs (with grammar and optional services) for the ITOI LSP.
 
-        Returns every ``active`` and ``draft`` DSL that has a grammar file.
-        A ``deprecated`` DSL is included only when its family has no active or
-        draft version, so a deprecated grammar is a fallback rather than a
-        shadow of the current family grammar. Drafts are included on purpose so
-        maintainers can test unpublished grammars in ITOI; the consumer
-        decides which version to prefer.
+        Returns the ``active`` and ``draft`` DSLs with a grammar file that the
+        launch principal may read in the registry, so maintainers can test
+        their unpublished grammars in ITOI while other users only receive
+        published ones. A visible ``deprecated`` DSL is included only when its
+        family has no visible active or draft version, so a deprecated grammar
+        is a fallback rather than a shadow of the current family grammar.
         Authenticated with the same forwarded launch token as
         ``get-file-list`` / ``download-file``.
         """
-        payload, error_resp = self._validate_launch_token()
+        token, payload, error_resp = self._validate_token_header('launch')
         if error_resp:
             return error_resp
 
-        dsls = request.env['itlingo.dsl'].sudo().search([
-            ('status', 'in', ['active', 'draft', 'deprecated']),
-        ])
+        dsls = self._visible_dsls(token.user_id)
         current_families = {
             dsl.family_id.id
             for dsl in dsls
@@ -545,7 +499,7 @@ class ITLingoIntegrationAPI(http.Controller):
 
         _logger.info(
             'ITOI get-dsls: user=%s dsls=%d',
-            payload.get('user'), len(result),
+            token.user_id.login, len(result),
         )
         return Response(
             json.dumps({'dsls': result}),

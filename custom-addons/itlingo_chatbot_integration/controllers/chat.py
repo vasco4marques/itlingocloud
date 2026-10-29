@@ -1,4 +1,5 @@
 from odoo import http
+from odoo.exceptions import AccessError
 from odoo.http import request, Response
 import os
 import hmac
@@ -211,8 +212,22 @@ class ChatController(http.Controller):
 
     @http.route(['/my/workspaces/<int:project_id>/chat'], type='http', auth='user', website=True)
     def workspace_chat(self, project_id, **kw):
+        """Chatbot for workspace members and platform admins.
+
+        Non-members of a public workspace are sent to the read-only public
+        chat; other workspaces are not disclosed.
+        """
+        project = request.env['itlingo.workspace'].sudo().browse(project_id)
+        if not project.exists():
+            return request.not_found()
+        user = request.env.user
+        if not (project._itlingo_user_role(user)
+                or user.has_group('itlingo_core.group_itlingo_admin')):
+            if project.is_public_workspace:
+                return request.redirect(f'/public-workspaces/{project_id}/chat')
+            return request.not_found()
         chat_url, secret = self._chat_config()
-        token = self._build_token_or_empty(project_id, request.env.user, secret)
+        token = self._build_token_or_empty(project_id, user, secret)
         return request.render('itlingo_chatbot_integration.chat_page', self._workspace_shell_values(project_id, chat_url, token))
 
     @http.route(['/public-workspaces/<int:project_id>/chat'], type='http', auth='public', website=True)
@@ -283,14 +298,11 @@ class ChatController(http.Controller):
                 'not_configured', 'ITOI URL is not configured in the integration settings')
 
         try:
-            payload = json.dumps({
-                'user': user.login,
-                'workspace': project.name,
-                'organization': project.organization_id.name if project.organization_id else '',
-                'write': True,
-                'wsid': project.id,
-            })
-            iv_b64, ct_b64 = settings._aes_encrypt(payload)
+            # Persisted like every ITOI launch token; the caller already
+            # verified the user's accepted write role on the workspace.
+            iv_b64, ct_b64 = request.env[
+                'itlingo.integration.token'
+            ]._issue_launch_token(user, project, True)
 
             resp = http_requests.post(
                 f'{itoi_url}/pushFile',
@@ -386,6 +398,21 @@ class ChatController(http.Controller):
         if int(payload.get('workspace_id') or 0) != workspace_id:
             return self._json_response({'error': 'Workspace mismatch'}, 403)
 
+        # Resolve and recheck the token principal before any business ORM
+        # call: the user must still be active and hold a write role now, and
+        # a read-only token never writes even if a role was granted since.
+        project = request.env['itlingo.workspace'].sudo().browse(workspace_id)
+        if not project.exists():
+            return self._json_response({'error': 'Workspace not found'}, 404)
+
+        user = request.env['res.users'].sudo().browse(int(payload.get('odoo_user_id') or 0)).exists()
+        if not user or not user.active or user._is_public():
+            return self._json_response({'error': 'Unknown user'}, 401)
+
+        if payload.get('read_only', True) or not _user_can_write_workspace(user, project.id):
+            return self._json_response(
+                {'error': 'You do not have write access to this workspace'}, 403)
+
         content = body.get('content')
         if not isinstance(content, str) or not content.strip():
             return self._json_response({'error': 'Missing content'}, 400)
@@ -405,24 +432,6 @@ class ChatController(http.Controller):
         except ValueError as err:
             return self._json_response({'error': str(err)}, 400)
 
-        project = request.env['itlingo.workspace'].sudo().browse(workspace_id)
-        if not project.exists():
-            return self._json_response({'error': 'Workspace not found'}, 404)
-
-        user = request.env['res.users'].sudo().browse(int(payload.get('odoo_user_id') or 0))
-        if not user.exists():
-            return self._json_response({'error': 'Unknown user'}, 401)
-
-        has_write = request.env['itlingo.project.role'].sudo().search_count([
-            ('user_id', '=', user.id),
-            ('project_id', '=', project.id),
-            ('state', '=', 'accepted'),
-            ('role', 'in', EXPORT_WRITE_ROLES),
-        ])
-        if not has_write:
-            return self._json_response(
-                {'error': 'You do not have write access to this workspace'}, 403)
-
         settings = request.env['itlingo.integration.settings'].sudo()._get_settings()
         base_name, ext = _split_filename(filename)
         # Files of a draft DSL are stored (and pushed to ITOI) with a
@@ -435,18 +444,23 @@ class ChatController(http.Controller):
             return self._json_response(
                 {'error': f'File extension ".{ext}" is not allowed'}, 400)
 
-        Document = request.env['itlingo.document'].sudo()
+        Document = request.env['itlingo.document'].with_user(user)
         existing = Document.search([('project_id', '=', project.id)]).mapped('file_name')
         final_name = _dedup_filename(filename, {n for n in existing if n})
 
-        document = Document.create({
-            'name': _split_filename(final_name)[0],
-            'file_name': final_name,
-            'document_file': base64.b64encode(content.encode('utf-8')),
-            'project_id': project.id,
-            'creator_id': user.id,
-            'status': 'draft',
-        })
+        try:
+            document = Document.create({
+                'name': _split_filename(final_name)[0],
+                'file_name': final_name,
+                'document_file': base64.b64encode(content.encode('utf-8')),
+                'project_id': project.id,
+                'creator_id': user.id,
+                'status': 'draft',
+            })
+        except AccessError:
+            return self._json_response(
+                {'error': 'You do not have write access to this workspace'}, 403)
+
         _logger.info(
             'Chatbot export: document id=%s file=%s workspace=%s user=%s',
             document.id, final_name, project.name, user.login,

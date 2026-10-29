@@ -1,9 +1,14 @@
 from odoo import http
+from werkzeug.exceptions import Forbidden
 from odoo.addons.portal.controllers.web import Home as PortalHome
-from odoo.addons.web.controllers.utils import is_user_internal
 from odoo.addons.website.controllers.main import Website as WebsiteHome
 from odoo.addons.website.controllers.main import WebsiteSession
 from odoo.http import request
+
+
+def _require_platform_admin():
+    if not request.env.user._itlingo_can_use_backend():
+        raise Forbidden('Only platform administrators can use the Odoo backend and model RPC.')
 
 
 class Website(WebsiteHome):
@@ -12,7 +17,7 @@ class Website(WebsiteHome):
     def _login_redirect(self, uid, redirect=None):
         if not redirect:
             user = request.env['res.users'].sudo().browse(uid)
-            if user._is_internal():
+            if user._itlingo_can_use_backend():
                 if request.params.get('login_success'):
                     redirect = '/odoo?' + request.httprequest.query_string.decode()
             elif user.org_setup_pending:
@@ -23,9 +28,20 @@ class Website(WebsiteHome):
 
     @http.route()
     def web_client(self, s_action=None, **kw):
-        if request.session.uid and not is_user_internal(request.session.uid):
+        user = request.env['res.users'].sudo().browse(request.session.uid)
+        if user and not user._itlingo_can_use_backend():
             return request.redirect_query('/', query=request.params)
         return super(PortalHome, self).web_client(s_action, **kw)
+
+    @http.route()
+    def switch_to_admin(self):
+        _require_platform_admin()
+        return super().switch_to_admin()
+
+    @http.route()
+    def web_load_menus(self, lang=None):
+        _require_platform_admin()
+        return super().web_load_menus(lang=lang)
 
 
 class WebsiteLogout(WebsiteSession):

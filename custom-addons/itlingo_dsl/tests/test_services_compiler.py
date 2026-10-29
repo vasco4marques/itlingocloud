@@ -168,3 +168,23 @@ class TestServicesCompilation(TransactionCase):
         )
         with self.assertRaises(AccessError):
             audits[0].write({"relative_path": "rewritten.ts"})
+
+    @patch(
+        "odoo.addons.itlingo_dsl.services.services_compiler.compile_services",
+        return_value=OK_RESULT,
+    )
+    def test_caller_context_cannot_skip_services_compilation(self, compile_mock):
+        services = self._create_services()
+        compile_mock.reset_mock()
+
+        # A plain boolean (as any RPC client can send) must not leave the
+        # compiled artifact stale.
+        services.with_context(skip_services_compile=True)._write_text_utf8(
+            "export default () => ({ changed: true });\n",
+        )
+
+        compile_mock.assert_called_once()
+        self.assertTrue(self.dsl.services_compile_is_current)
+        self.assertEqual(
+            self.dsl.services_source_digest, self.dsl._services_source_digest(),
+        )

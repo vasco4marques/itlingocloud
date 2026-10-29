@@ -156,12 +156,8 @@ class TestPortalGenerate(HttpCase):
             "name": "Template Workspace Test",
             "organization_id": cls.organization.id,
         })
-        cls.env["itlingo.project.role"].create({
-            "user_id": cls.portal_user.id,
-            "project_id": cls.workspace.id,
-            "role": "ws_manager",
-            "state": "accepted",
-        })
+        # The portal user (and maintainer_user) are accepted org_managers,
+        # so workspace creation already grants them accepted ws_manager roles.
         cls.workspace_only_user = new_test_user(
             cls.env,
             login="template_workspace_only",

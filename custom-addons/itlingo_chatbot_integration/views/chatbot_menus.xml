@@ -4,7 +4,8 @@
     <menuitem id="itlingo_menu_chatbot"
               name="Chatbot"
               parent="itlingo_core.itlingo_menu_root"
-              sequence="50"/>
+              sequence="50"
+              groups="itlingo_core.group_itlingo_admin"/>
 
     <menuitem id="itlingo_menu_chatbot_conversations"
               name="Conversations"

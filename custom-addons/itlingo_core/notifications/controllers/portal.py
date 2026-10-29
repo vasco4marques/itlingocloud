@@ -56,9 +56,10 @@ class ITLingoNotificationPortal(CustomerPortal):
         type='http', auth='user', website=True, methods=['POST'],
     )
     def portal_notification_respond(self, notification_id, action=None, **kw):
-        notif = request.env['itlingo.notification'].sudo().browse(notification_id)
-        if (notif.exists() and notif.user_id.id == request.uid
-                and action in ('accept', 'reject')):
+        notif = request.env['itlingo.notification'].search([
+            ('id', '=', notification_id), ('user_id', '=', request.uid),
+        ])
+        if notif and action in ('accept', 'reject'):
             role = notif._linked_invitation_role()
             if role and role.state == 'pending':
                 if action == 'accept':

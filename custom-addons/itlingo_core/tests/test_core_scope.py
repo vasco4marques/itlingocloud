@@ -35,17 +35,25 @@ class TestCoreMemberScope(TransactionCase):
             'role': 'ws_member', 'state': 'accepted',
         })
         Document = cls.env['itlingo.document']
+        # Plain members read published documents only (portal policy).
         cls.doc_org_a = Document.create({
             'name': 'Org A Doc', 'organization_id': cls.org_a.id,
+            'status': 'published',
         })
         cls.doc_ws_a = Document.create({
             'name': 'Workspace A Doc', 'project_id': cls.ws_a.id,
+            'status': 'published',
+        })
+        cls.draft_ws_a = Document.create({
+            'name': 'Workspace A Draft', 'project_id': cls.ws_a.id,
         })
         cls.doc_org_b = Document.create({
             'name': 'Org B Doc', 'organization_id': cls.org_b.id,
+            'status': 'published',
         })
         cls.doc_ws_b = Document.create({
             'name': 'Workspace B Doc', 'project_id': cls.ws_b.id,
+            'status': 'published',
         })
         Notification = cls.env['itlingo.notification']
         cls.own_notification = Notification._notify(
@@ -69,7 +77,8 @@ class TestCoreMemberScope(TransactionCase):
             self._visible('itlingo.workspace', self.ws_a | self.ws_b),
             self.ws_a,
         )
-        documents = self.doc_org_a | self.doc_ws_a | self.doc_org_b | self.doc_ws_b
+        documents = (self.doc_org_a | self.doc_ws_a | self.draft_ws_a
+                     | self.doc_org_b | self.doc_ws_b)
         self.assertEqual(
             self._visible('itlingo.document', documents),
             self.doc_org_a | self.doc_ws_a,

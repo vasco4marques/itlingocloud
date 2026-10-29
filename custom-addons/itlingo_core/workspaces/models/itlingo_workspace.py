@@ -1,5 +1,10 @@
 from odoo import api, fields, models, _
+from odoo.exceptions import AccessError
 import uuid
+
+from odoo.addons.itlingo_core.organizations.models.itlingo_organization import (
+    _is_itlingo_admin, _strip_default_context,
+)
 
 
 class ItlingoWorkspace(models.Model):
@@ -61,12 +66,65 @@ class ItlingoWorkspace(models.Model):
         compute='_compute_workspace_member_count', string='Workspace Members',
     )
 
+    # Identity and scope: set once by the system, changed only by admins.
+    _ADMIN_ONLY_FIELDS = frozenset({
+        'organization_id', 'creator_id', 'workspace_key', 'workspace_role_ids', 'document_ids',
+    })
+
     @api.depends('workspace_role_ids', 'workspace_role_ids.state')
     def _compute_workspace_member_count(self):
         for workspace in self:
             workspace.workspace_member_count = len(
                 workspace.workspace_role_ids.filtered(lambda r: r.state == 'accepted')
             )
+
+    def _itlingo_user_role(self, user=None):
+        """Accepted role of ``user`` (default: current user), read as sudo."""
+        self.ensure_one()
+        user = user or self.env.user
+        return self.env['itlingo.project.role'].sudo().search([
+            ('project_id', '=', self.id),
+            ('user_id', '=', user.id),
+            ('state', '=', 'accepted'),
+        ], limit=1)
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        if not _is_itlingo_admin(self.env):
+            # Context defaults would set creator/key/scope after these checks.
+            self = _strip_default_context(self)
+            for vals in vals_list:
+                locked = set(vals) & (self._ADMIN_ONLY_FIELDS - {'organization_id'})
+                if vals.get('creator_id') == self.env.user.id:
+                    locked.discard('creator_id')
+                if locked or not vals.get('organization_id'):
+                    raise AccessError(_(
+                        'A workspace needs an organization; its creator and key are set by the system.'))
+        # The create rule requires an accepted role in the organization.
+        with self.env.cr.savepoint():
+            workspaces = super().create(vals_list)
+            if not self.env.su:
+                # Bootstrap: the creator manages the new workspace.
+                self.env['itlingo.project.role'].sudo().create([{
+                    'project_id': ws.id,
+                    'user_id': self.env.user.id,
+                    'role': 'ws_manager',
+                    'state': 'accepted',
+                } for ws in workspaces])
+            # Org managers manage every workspace of their organization
+            # (same policy as on promotion); only the new workspaces.
+            self.env['itlingo.organization.role'].sudo().search([
+                ('organization_id', 'in', workspaces.organization_id.ids),
+                ('role', '=', 'org_manager'),
+                ('state', '=', 'accepted'),
+            ])._cascade_ws_manager(workspaces)
+        return workspaces
+
+    def write(self, vals):
+        if not _is_itlingo_admin(self.env) and self._ADMIN_ONLY_FIELDS & set(vals):
+            raise AccessError(_('Only platform administrators can change %s.',
+                                ', '.join(sorted(self._ADMIN_ONLY_FIELDS & set(vals)))))
+        return super().write(vals)
 
     def action_invite_workspace_member(self):
         return {

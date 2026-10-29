@@ -45,7 +45,9 @@ class ITLingoDslGrammarPortal(ITLingoDslPortal):
     def _services_compilation_payload(self, dsl):
         return {
             'result': dsl.services_compile_result or '',
-            'diagnostics': list(dsl.services_compile_diagnostics or []),
+            'diagnostics': list(
+                dsl._authoring_diagnostics('services_compile_diagnostics') or []
+            ),
         }
 
     def _workspace_file_type(self, file_type):
@@ -183,7 +185,7 @@ class ITLingoDslGrammarPortal(ITLingoDslPortal):
     ):
         dsl = self._dsl_or_404(dsl_id)
         self._require_grammar_edit(dsl)
-        File = request.env['itlingo.dsl.file'].sudo()
+        File = request.env['itlingo.dsl.file']
 
         if file_id:
             grammar = self._grammar_file_or_404(dsl, file_id, file_type=file_type)
@@ -224,7 +226,7 @@ class ITLingoDslGrammarPortal(ITLingoDslPortal):
     ):
         dsl = self._dsl_or_404(dsl_id)
         self._require_grammar_edit(dsl)
-        File = request.env['itlingo.dsl.file'].sudo()
+        File = request.env['itlingo.dsl.file']
         file_type = self._workspace_file_type(file_type)
         normalized_path = File._normalize_grammar_path(path, file_type=file_type)
         create_text = (
@@ -296,6 +298,8 @@ class ITLingoDslGrammarPortal(ITLingoDslPortal):
 
         # Flip the complete workspace in one statement so the one-entry
         # invariant never observes a transient zero-entry or two-entry state.
+        # Raw SQL bypasses the ORM, so check the visitor's rights first.
+        grammars.check_access('write')
         request.env.cr.execute(
             'UPDATE itlingo_dsl_file '
             'SET is_entry = (id = %s) '
@@ -329,7 +333,7 @@ class ITLingoDslGrammarPortal(ITLingoDslPortal):
     def portal_dsl_grammar_import(self, dsl_id, files, **kw):
         dsl = self._dsl_or_404(dsl_id)
         self._require_grammar_edit(dsl)
-        File = request.env['itlingo.dsl.file'].sudo()
+        File = request.env['itlingo.dsl.file']
         if not isinstance(files, list):
             raise ValidationError(_('Grammar workspace files must be a list.'))
 
@@ -383,8 +387,9 @@ class ITLingoDslGrammarPortal(ITLingoDslPortal):
         structural_files = dsl.file_ids.filtered(
             lambda item: item.file_type in _WORKSPACE_FILE_TYPES
         )
-        structural_files.with_context(skip_services_compile=True).unlink()
-        File = File.with_context(skip_services_compile=True)
+        # Compile once after the whole batch instead of once per file.
+        structural_files._without_services_compile().unlink()
+        File = File._without_services_compile()
         for item in sorted(
             prepared,
             key=lambda value: (

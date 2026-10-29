@@ -2,50 +2,111 @@
 <odoo>
 <data noupdate="0">
 
-    <!-- ITLingo Admin sees all organizations -->
+    <!--
+        Portal and ITLingo Member rules carry both groups: group rules are
+        OR-ed, so one rule per operation keeps the two groups identical.
+        Each "any" sub-domain matches one role row (user AND state AND role).
+    -->
+
     <record id="itlingo_organization_rule_admin" model="ir.rule">
         <field name="name">ITLingo Organization: admin sees all</field>
         <field name="model_id" ref="model_itlingo_organization"/>
         <field name="domain_force">[(1, '=', 1)]</field>
-        <field name="groups" eval="[(4, ref('group_itlingo_admin'))]"/>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_admin')])]"/>
     </record>
 
-    <!-- Members see organizations where they have an accepted role -->
     <record id="itlingo_organization_rule_member" model="ir.rule">
-        <field name="name">ITLingo Organization: member sees own orgs</field>
+        <field name="name">ITLingo Organization: read own organizations</field>
         <field name="model_id" ref="model_itlingo_organization"/>
-        <field name="domain_force">[('role_ids.user_id', '=', user.id), ('role_ids.state', '=', 'accepted')]</field>
-        <field name="groups" eval="[(4, ref('group_itlingo_member'))]"/>
+        <field name="domain_force">['|',
+            ('role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted')]),
+            ('workspace_ids.workspace_role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
     </record>
 
-    <!-- Portal users see organizations where they have an accepted role -->
+    <record id="itlingo_organization_rule_create" model="ir.rule">
+        <field name="name">ITLingo Organization: any user creates (becomes manager)</field>
+        <field name="model_id" ref="model_itlingo_organization"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
     <record id="itlingo_organization_rule_portal" model="ir.rule">
-        <field name="name">ITLingo Organization: portal sees own orgs</field>
+        <field name="name">ITLingo Organization: managers change and delete</field>
         <field name="model_id" ref="model_itlingo_organization"/>
-        <field name="domain_force">[('role_ids.user_id', '=', user.id), ('role_ids.state', '=', 'accepted')]</field>
-        <field name="groups" eval="[(4, ref('base.group_portal'))]"/>
+        <field name="domain_force">[('role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'org_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="True"/>
     </record>
 
-    <!-- Org role rules: users see their own roles + admins see all -->
     <record id="itlingo_organization_role_rule_admin" model="ir.rule">
         <field name="name">ITLingo Org Role: admin sees all</field>
         <field name="model_id" ref="model_itlingo_organization_role"/>
         <field name="domain_force">[(1, '=', 1)]</field>
-        <field name="groups" eval="[(4, ref('group_itlingo_admin'))]"/>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_admin')])]"/>
     </record>
 
+    <!-- Only managers see the other members (portal users page policy). -->
     <record id="itlingo_organization_role_rule_member" model="ir.rule">
-        <field name="name">ITLingo Org Role: member sees roles in own orgs</field>
+        <field name="name">ITLingo Org Role: read own rows, managers read the organization</field>
         <field name="model_id" ref="model_itlingo_organization_role"/>
-        <field name="domain_force">[('organization_id.role_ids.user_id', '=', user.id), ('organization_id.role_ids.state', '=', 'accepted')]</field>
-        <field name="groups" eval="[(4, ref('group_itlingo_member'))]"/>
+        <field name="domain_force">['|', ('user_id', '=', user.id),
+            ('organization_id.role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'org_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
     </record>
 
     <record id="itlingo_organization_role_rule_portal" model="ir.rule">
-        <field name="name">ITLingo Org Role: portal sees own roles</field>
+        <field name="name">ITLingo Org Role: managers invite and change roles</field>
         <field name="model_id" ref="model_itlingo_organization_role"/>
-        <field name="domain_force">['|', ('user_id', '=', user.id), '&amp;', ('organization_id.role_ids.user_id', '=', user.id), ('organization_id.role_ids.state', '=', 'accepted')]</field>
-        <field name="groups" eval="[(4, ref('base.group_portal'))]"/>
+        <field name="domain_force">[('organization_id.role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'org_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <record id="itlingo_organization_role_rule_unlink" model="ir.rule">
+        <field name="name">ITLingo Org Role: leave, or managers remove</field>
+        <field name="model_id" ref="model_itlingo_organization_role"/>
+        <field name="domain_force">['|', ('user_id', '=', user.id),
+            ('organization_id.role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'org_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <record id="itlingo_pending_invitation_rule_admin" model="ir.rule">
+        <field name="name">ITLingo Pending Invitation: admin sees all</field>
+        <field name="model_id" ref="model_itlingo_pending_invitation"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_admin')])]"/>
+    </record>
+
+    <record id="itlingo_pending_invitation_rule_scope_manager" model="ir.rule">
+        <field name="name">ITLingo Pending Invitation: managers of the target scope</field>
+        <field name="model_id" ref="model_itlingo_pending_invitation"/>
+        <field name="domain_force">['|',
+            ('organization_id.role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'org_manager')]),
+            ('project_id.workspace_role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'ws_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('group_itlingo_member'), ref('base.group_portal')])]"/>
     </record>
 
 </data>

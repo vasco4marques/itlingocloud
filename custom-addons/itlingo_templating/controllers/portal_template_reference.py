@@ -88,7 +88,7 @@ class ItlingoTemplateReferencePortal(http.Controller):
     )
     def portal_template_reference_list(self, **kw):
         portal = ITLingoDslPortal()
-        dsls = request.env["itlingo.dsl"].sudo().search(
+        dsls = portal._dsl_model().search(
             portal._dsl_view_domain(), order="acronym, version desc",
         )
         values = portal._prepare_portal_layout_values()

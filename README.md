@@ -126,6 +126,32 @@ The document review workflow no longer requires a library. Submit for Review cha
 
 The projects API no longer returns `methodology`. Current ITOI and chatbot code do not read that field. The one-time Django importer and its commands are removed.
 
+### Permission changes
+
+Back up the database and filestore before the module update to core version `19.0.3.2.0`.
+
+Access rules after this update:
+
+- The Odoo backend and generic model RPC require an active internal user in the `ITLingo Admin` group. This includes `call_kw`, `call_button`, JSON-2, and password login through the external RPC API.
+- Portal users keep their normal record rules and ORM permissions in the portal pages.
+- The custom portal JSON-RPC routes and the integration APIs stay available. Each route does its own access checks.
+- A launch for a public workspace includes only the published documents of that workspace. It excludes organization-only documents, also for signed-in organization members.
+
+The migration changes existing data as follows:
+
+- It keeps old workspace manager grants and marks them as `legacy`. The Odoo log names each grant. An administrator must examine these grants and remove the incorrect ones.
+- Old pending organization and workspace roles now require mailbox proof. Old pending invitations cannot be claimed at signup. Send these invitations again.
+- It deletes pending invitations to workspaces that do not exist.
+- Old ITOI launch tokens that the server did not record do not open a session. Users must launch ITOI again from the portal.
+
+Invitation mail uses the Odoo signup links. Before you send invitations, configure these items:
+
+- Configure an outgoing SMTP server.
+- Set a valid company email address for invitation mail.
+- Set `web.base.url` and the public domain to the correct values. The links contain this URL.
+
+The signup link expires after `auth_signup.signup.validity.hours` hours. The Odoo default is 144 hours.
+
 ### Tests
 
 Use a separate database for module tests. Do not run tests against your application database.
@@ -149,7 +175,7 @@ The production host requires `.env` and `odoo.docker.conf`, based on the example
 
 `deploy.sh` builds and publishes the image, then updates the existing droplet. The script contains the current image name, server address, and SSH key path. Examine those values before use. It requires a Git commit for the image tag.
 
-The script installs both `docker-compose.yml` and `Makefile.droplet` on the server. The Makefile invokes the consolidation script before a module update. Back up the database and filestore before the first deployment of the six-module layout.
+The script installs both `docker-compose.yml` and `Makefile.droplet` on the server. The Makefile invokes the consolidation script before a module update. Back up the database and filestore before each module update.
 
 Do not run `deploy.sh` to test a local installation. It changes the production server.
 
@@ -177,6 +203,13 @@ Author-supplied DSL services run with the permissions of the application process
 ## External integrations
 
 Configure ITOI and ITLingo-Chatbot separately. Their connection settings and matching secrets depend on the target installation. This repository includes the Odoo integration modules, not those external services.
+
+Deploy this version of ITLingoCloud and the matching ITOI version together. ITOI calls `/token_api/validate-launch` before it creates a workspace and before each write that uses a launch token. If this route is not available, ITOI refuses the operation.
+
+Current limits:
+
+- A chatbot JWT stays valid for its full lifetime of one hour. A role change does not revoke an issued JWT immediately.
+- ITOI shares one Theia file system between the sessions. File system events from this file system do not identify the user. Thus, a role change does not immediately stop file writes from an open session.
 
 ### Shared chatbot tables
 

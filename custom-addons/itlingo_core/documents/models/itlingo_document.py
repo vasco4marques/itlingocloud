@@ -2,7 +2,11 @@ import base64
 import logging
 
 from odoo import api, fields, models, _
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
+
+from odoo.addons.itlingo_core.organizations.models.itlingo_organization import (
+    _is_itlingo_admin, _strip_default_context,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -153,10 +157,26 @@ class ItlingoDocument(models.Model):
                     document=doc.name,
                 ))
 
+    # Authorship is recorded by the system; scope changes are re-checked.
+    _SYSTEM_FIELDS = frozenset({'creator_id', 'creation_date'})
+    _SCOPE_FIELDS = frozenset({'organization_id', 'project_id'})
+
     @api.model_create_multi
     def create(self, vals_list):
-        records = super().create(vals_list)
-        records._sync_kb_files()
+        if not _is_itlingo_admin(self.env):
+            # Context defaults would set authorship or scope after this check.
+            self = _strip_default_context(self)
+            for vals in vals_list:
+                locked = set(vals) & self._SYSTEM_FIELDS
+                if vals.get('creator_id') == self.env.user.id:
+                    locked.discard('creator_id')
+                if locked:
+                    raise AccessError(_('The author of a document is set by the system.'))
+        # The create rule requires editor rights on the new scope. The
+        # savepoint drops the row and its KB copy if a later step fails.
+        with self.env.cr.savepoint():
+            records = super().create(vals_list)
+            records._sync_kb_files()
         return records
 
     def write(self, vals):
@@ -179,10 +199,18 @@ class ItlingoDocument(models.Model):
                         doc.organization_id.id if doc.organization_id else None,
                         doc.project_id.id if doc.project_id else None,
                     ))
-        result = super().write(vals)
-        self._remove_legacy_kb_files(legacy_kb_keys)
-        if any(f in vals for f in self._KB_SYNC_TRIGGER_FIELDS):
-            self._sync_kb_files()
+        if not _is_itlingo_admin(self.env) and self._SYSTEM_FIELDS & set(vals):
+            raise AccessError(_('The author of a document is set by the system.'))
+        # Savepoint: the scope re-check and the KB sync run after the write;
+        # a caller that catches their error must keep the old file and status.
+        with self.env.cr.savepoint():
+            result = super().write(vals)
+            if self._SCOPE_FIELDS & set(vals) and not self.env.su:
+                # Write rules ran on the old scope; the new scope needs the same rights.
+                self.check_access('write')
+            self._remove_legacy_kb_files(legacy_kb_keys)
+            if any(f in vals for f in self._KB_SYNC_TRIGGER_FIELDS):
+                self._sync_kb_files()
         return result
 
     def action_publish(self):
@@ -195,9 +223,14 @@ class ItlingoDocument(models.Model):
         self.write({'status': 'draft'})
 
     def unlink(self):
-        """Remove KB files before deleting the document."""
-        self._remove_kb_files()
-        return super().unlink()
+        """Remove KB files and the document together. The access check comes
+        first, and the savepoint also undoes the raw KB delete when a later
+        step fails, so a refused delete keeps the grounding pool intact."""
+        self.check_access('unlink')
+        with self.env.cr.savepoint():
+            self._remove_kb_files()
+            res = super().unlink()
+        return res
 
     # --------------------------------------------------------
     # KB file sync – create/update chatbot_kbfile records

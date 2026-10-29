@@ -58,6 +58,12 @@ class ItlingoDsl(models.Model):
         for dsl in self:
             dsl.templating_generation_available = is_templatable_dsl(dsl.env, dsl)
 
+    @api.model
+    def _system_managed_fields(self):
+        return super()._system_managed_fields() | {
+            "template_reference_json", "template_reference_digest",
+        }
+
     @api.constrains("template_profile")
     def _check_template_profile(self):
         for dsl in self:

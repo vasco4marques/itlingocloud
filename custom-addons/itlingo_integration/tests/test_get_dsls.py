@@ -15,7 +15,7 @@ class TestGetDsls(HttpCase):
             cls.env,
             login='itoi_document_source_user',
             password='itoi_document_source_user',
-            groups='base.group_user',
+            groups='base.group_portal',
         )
         cls.File = cls.env["itlingo.dsl.file"]
         cls.dsl = cls.env["itlingo.dsl"].create({
@@ -95,7 +95,7 @@ class TestGetDsls(HttpCase):
         cls.env["itlingo.project.role"].create({
             "user_id": cls.source_user.id,
             "project_id": cls.workspace.id,
-            "role": "ws_member",
+            "role": "doc_manager",
             "state": "accepted",
         })
         doc_type = cls.env.ref("itlingo_core.doc_type_specification")
@@ -146,11 +146,23 @@ class TestGetDsls(HttpCase):
                 b"Package p_Foreign System Foreign"
             ),
         })
+        cls.env["itlingo.organization.role"].create({
+            "user_id": cls.source_user.id,
+            "organization_id": cls.organization.id,
+            "role": "doc_manager",
+            "state": "accepted",
+        })
+        # Drafts are visible in ITOI only to their family maintainers.
+        for dsl in (cls.dsl, cls.plain_dsl, cls.broken_dsl):
+            dsl.family_id.maintainer_ids = [(4, cls.source_user.id)]
 
-    def _authorization_headers(self, payload=None):
-        iv, ciphertext = self.settings._aes_encrypt(json.dumps(
-            payload or {"user": "itoi-boundary-test"}
-        ))
+    def _authorization_headers(self, user=None, workspace=None, public=False):
+        iv, ciphertext = self.env[
+            "itlingo.integration.token"
+        ]._issue_launch_token(
+            user or self.source_user, workspace or self.workspace, False,
+            public=public,
+        )
         return {"Authorization": "Bearer %s:%s" % (iv, ciphertext)}
 
     def test_get_dsls_emits_flattened_grammar_and_matching_digest(self):
@@ -249,10 +261,7 @@ class TestGetDsls(HttpCase):
     def test_get_dsl_sources_is_limited_to_launch_workspace_and_organization(self):
         response = self.url_open(
             "/token_api/get-dsl-sources/%s" % self.dsl.id,
-            headers=self._authorization_headers({
-                "user": self.source_user.login,
-                "wsid": self.workspace.id,
-            }),
+            headers=self._authorization_headers(),
         )
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -283,10 +292,60 @@ class TestGetDsls(HttpCase):
         })
         response = self.url_open(
             "/token_api/get-dsl-sources/%s" % deprecated.id,
-            headers=self._authorization_headers({
-                "user": self.source_user.login,
-                "wsid": self.workspace.id,
-            }),
+            headers=self._authorization_headers(),
         )
 
         self.assertEqual(response.status_code, 200, response.text)
+
+    def _visible_dsl_ids(self, user, workspace, public=False):
+        response = self.url_open(
+            "/token_api/get-dsls",
+            headers=self._authorization_headers(user, workspace, public),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return {item["id"] for item in json.loads(response.text)["dsls"]}
+
+    def test_get_dsls_hides_drafts_from_non_maintainers(self):
+        published = self.env["itlingo.dsl"].create({
+            "name": "ITOI published grammar",
+            "acronym": "ITOIPUBLISHED",
+            "version": "test-1",
+            "status": "draft",
+            "file_extensions": ".ipub",
+        })
+        self.File._create_grammar_text(
+            published,
+            "Main.langium",
+            "grammar ITOIPUBLISHED\n"
+            "entry Model: 'model' name=ID;\n"
+            "hidden terminal WS: /\\s+/;\n"
+            "terminal ID: /[_a-zA-Z][\\w_]*/;\n",
+            is_entry=True,
+        )
+        published.action_publish()
+        public_workspace = self.env["itlingo.workspace"].create({
+            "name": "ITOI public DSL workspace",
+            "is_public_workspace": True,
+        })
+        non_maintainer = new_test_user(
+            self.env, login="itoi_dsl_non_maintainer",
+            groups="base.group_portal",
+        )
+        self.env["itlingo.project.role"].create({
+            "user_id": non_maintainer.id,
+            "project_id": public_workspace.id,
+            "role": "ws_manager",
+            "state": "accepted",
+        })
+        drafts = {self.dsl.id, self.dsl_alt.id, self.plain_dsl.id}
+
+        for user, public in (
+                (non_maintainer, False),
+                (self.env.ref("base.public_user"), True)):
+            visible = self._visible_dsl_ids(user, public_workspace, public)
+            self.assertIn(published.id, visible)
+            self.assertFalse(visible & drafts)
+
+        visible = self._visible_dsl_ids(self.source_user, self.workspace)
+        self.assertIn(published.id, visible)
+        self.assertTrue({self.dsl.id, self.plain_dsl.id} <= visible)

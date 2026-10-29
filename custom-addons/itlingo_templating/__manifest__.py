@@ -1,6 +1,6 @@
 {
     'name': 'ITLingo Templating',
-    'version': '19.0.1.9.0',
+    'version': '19.0.1.10.0',
     'category': 'Services',
     'summary': 'Generate office and text documents, single or multi-file, from any published DSL',
     'description': """

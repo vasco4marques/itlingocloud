@@ -8,9 +8,10 @@
             <list>
                 <field name="user_id"/>
                 <field name="project_id"/>
+                <field name="token_kind"/>
                 <field name="description"/>
                 <field name="expires_at"/>
-                <field name="is_active" widget="boolean_toggle"/>
+                <field name="is_active" readonly="1"/>
                 <field name="create_date" string="Created"/>
             </list>
         </field>
@@ -24,10 +25,10 @@
                 <header>
                     <button name="action_generate_token" string="Generate Token"
                             type="object" class="btn-primary"
-                            invisible="token_ct"/>
+                            invisible="token_ct or not is_active or token_kind != 'api'"/>
                     <button name="action_generate_token" string="Regenerate Token"
                             type="object" class="btn-warning"
-                            invisible="not token_ct"/>
+                            invisible="not token_ct or not is_active or token_kind != 'api'"/>
                     <button name="action_revoke" string="Revoke"
                             type="object" class="btn-danger"
                             invisible="not is_active"/>
@@ -35,12 +36,13 @@
                 <sheet>
                     <group>
                         <group>
-                            <field name="user_id"/>
-                            <field name="project_id"/>
+                            <field name="user_id" readonly="id"/>
+                            <field name="project_id" readonly="id"/>
+                            <field name="token_kind"/>
                             <field name="description"/>
                         </group>
                         <group>
-                            <field name="is_active"/>
+                            <field name="is_active" readonly="1"/>
                             <field name="expires_at"/>
                             <field name="create_date" string="Created"/>
                         </group>

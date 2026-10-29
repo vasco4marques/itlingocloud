@@ -2,52 +2,91 @@
 <odoo>
 <data noupdate="0">
 
-    <!-- ITLingo Admin sees all project roles -->
+    <!-- See organizations/security/itlingo_organization_rules.xml for the rule layout. -->
+
     <record id="itlingo_project_role_rule_admin" model="ir.rule">
         <field name="name">ITLingo Project Role: admin sees all</field>
         <field name="model_id" ref="model_itlingo_project_role"/>
         <field name="domain_force">[(1, '=', 1)]</field>
-        <field name="groups" eval="[(4, ref('itlingo_core.group_itlingo_admin'))]"/>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_admin')])]"/>
     </record>
 
-    <!-- Members see project roles in projects where they have an accepted role -->
     <record id="itlingo_project_role_rule_member" model="ir.rule">
-        <field name="name">ITLingo Project Role: member sees roles in own projects</field>
+        <field name="name">ITLingo Project Role: own rows, accepted members, managers all</field>
         <field name="model_id" ref="model_itlingo_project_role"/>
-        <field name="domain_force">[('project_id.workspace_role_ids.user_id', '=', user.id), ('project_id.workspace_role_ids.state', '=', 'accepted')]</field>
-        <field name="groups" eval="[(4, ref('itlingo_core.group_itlingo_member'))]"/>
+        <field name="domain_force">['|', '|', ('user_id', '=', user.id),
+            '&amp;', ('state', '=', 'accepted'), ('project_id.workspace_role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted')]),
+            ('project_id.workspace_role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'ws_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
     </record>
 
-    <!-- Portal sees own project roles -->
     <record id="itlingo_project_role_rule_portal" model="ir.rule">
-        <field name="name">ITLingo Project Role: portal sees own roles</field>
+        <field name="name">ITLingo Project Role: managers invite and change roles</field>
         <field name="model_id" ref="model_itlingo_project_role"/>
-        <field name="domain_force">['|', ('user_id', '=', user.id), '&amp;', ('project_id.workspace_role_ids.user_id', '=', user.id), ('project_id.workspace_role_ids.state', '=', 'accepted')]</field>
-        <field name="groups" eval="[(4, ref('base.group_portal'))]"/>
+        <field name="domain_force">[('project_id.workspace_role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'ws_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
     </record>
 
-    <!-- ITLingo Admin sees all workspaces -->
+    <record id="itlingo_project_role_rule_unlink" model="ir.rule">
+        <field name="name">ITLingo Project Role: leave, or managers remove</field>
+        <field name="model_id" ref="model_itlingo_project_role"/>
+        <field name="domain_force">['|', ('user_id', '=', user.id),
+            ('project_id.workspace_role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'ws_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
     <record id="itlingo_workspace_rule_admin" model="ir.rule">
         <field name="name">ITLingo Workspace: admin sees all</field>
         <field name="model_id" ref="model_itlingo_workspace"/>
         <field name="domain_force">[(1, '=', 1)]</field>
-        <field name="groups" eval="[(4, ref('itlingo_core.group_itlingo_admin'))]"/>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_admin')])]"/>
     </record>
 
-    <!-- Members see workspaces where they have an accepted role -->
+    <!-- Public visibility grants read only. -->
     <record id="itlingo_workspace_rule_member" model="ir.rule">
-        <field name="name">ITLingo Workspace: member sees own workspaces</field>
+        <field name="name">ITLingo Workspace: read own and public workspaces</field>
         <field name="model_id" ref="model_itlingo_workspace"/>
-        <field name="domain_force">[('workspace_role_ids.user_id', '=', user.id), ('workspace_role_ids.state', '=', 'accepted')]</field>
-        <field name="groups" eval="[(4, ref('itlingo_core.group_itlingo_member'))]"/>
+        <field name="domain_force">['|', ('is_public_workspace', '=', True),
+            ('workspace_role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
     </record>
 
-    <!-- Portal sees public workspaces and workspaces where they have an accepted role -->
-    <record id="itlingo_workspace_rule_portal" model="ir.rule">
-        <field name="name">ITLingo Workspace: portal sees own and public workspaces</field>
+    <record id="itlingo_workspace_rule_create" model="ir.rule">
+        <field name="name">ITLingo Workspace: organization members create</field>
         <field name="model_id" ref="model_itlingo_workspace"/>
-        <field name="domain_force">['|', ('is_public_workspace', '=', True), '&amp;', ('workspace_role_ids.user_id', '=', user.id), ('workspace_role_ids.state', '=', 'accepted')]</field>
-        <field name="groups" eval="[(4, ref('base.group_portal'))]"/>
+        <field name="domain_force">[('organization_id.role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <record id="itlingo_workspace_rule_portal" model="ir.rule">
+        <field name="name">ITLingo Workspace: managers change and delete</field>
+        <field name="model_id" ref="model_itlingo_workspace"/>
+        <field name="domain_force">[('workspace_role_ids', 'any', [('user_id', '=', user.id), ('state', '=', 'accepted'), ('role', '=', 'ws_manager')])]</field>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="False"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="True"/>
     </record>
 
 </data>

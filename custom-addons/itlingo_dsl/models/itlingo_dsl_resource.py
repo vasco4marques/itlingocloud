@@ -83,3 +83,10 @@ class ItlingoDslResource(models.Model):
         string="Active",
         default=True,
     )
+
+    def write(self, vals):
+        result = super().write(vals)
+        if "dsl_id" in vals:
+            # Rules checked the old DSL; the new one must allow it too.
+            self.check_access("write")
+        return result

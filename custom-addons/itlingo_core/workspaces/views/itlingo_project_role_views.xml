@@ -16,6 +16,7 @@
                        decoration-danger="state == 'rejected'"/>
                 <field name="invite_date"/>
                 <field name="response_date"/>
+                <field name="grant_source" optional="show"/>
             </list>
         </field>
     </record>
@@ -41,6 +42,7 @@
                         <field name="project_id"/>
                         <field name="user_id"/>
                         <field name="role"/>
+                        <field name="grant_source"/>
                     </group>
                     <group>
                         <field name="invite_date"/>
@@ -65,6 +67,8 @@
                         domain="[('state', '=', 'accepted')]"/>
                 <filter name="rejected" string="Rejected"
                         domain="[('state', '=', 'rejected')]"/>
+                <filter name="legacy_grant" string="Legacy grants (review)"
+                        domain="[('grant_source', '=', 'legacy')]"/>
                 <group name="group_by">
                     <filter name="group_project" string="Project"
                             context="{'group_by': 'project_id'}"/>

@@ -3,11 +3,11 @@
 <data noupdate="1">
 
     <!--
-        Technical group whose membership mirrors itlingo.dsl.maintainer_ids
-        (kept in sync by the model). It is used only to surface DSL-management
-        navigation (top menu / portal area access) for maintainers. It does NOT
-        grant edit access to any DSL: per-DSL edit rights are enforced in the
-        portal controller against each DSL's maintainer_ids.
+        Technical group whose membership mirrors itlingo.dsl.family.maintainer_ids
+        (kept in sync by the model). It carries the DSL/file write ACLs; the
+        maintainer record rules restrict them to the families each user
+        maintains. Family identity, maintainers, and publication stay
+        admin-only.
     -->
     <record id="group_itlingo_dsl_maintainer" model="res.groups">
         <field name="name">ITLingo DSL Maintainer</field>

@@ -21,6 +21,10 @@ class ITLingoDslPortal(CustomerPortal):
     DSL maintainers can edit only the specific DSLs they maintain (metadata and
     definition files); they cannot create or delete DSLs, nor manage the
     maintainer list.
+
+    Every operation runs with the visitor's own ORM rights; the itlingo.dsl
+    record rules decide what is visible and writable. Only the anonymous
+    catalog, which has no ACL, reads active metadata as superuser.
     """
 
     # ──────────────────────────────────────────────
@@ -36,9 +40,22 @@ class ITLingoDslPortal(CustomerPortal):
         if not self._itlingo_is_admin():
             raise AccessError(_('Only platform administrators can do this.'))
 
+    def _dsl_model(self):
+        """The DSL model for catalog reads.
+
+        Visitors without any DSL ACL (anonymous users) get superuser reads;
+        callers must then restrict the domain to public metadata, as
+        ``_dsl_view_domain`` does.
+        """
+        Dsl = request.env['itlingo.dsl']
+        return Dsl if Dsl.has_access('read') else Dsl.sudo()
+
     def _maintained_dsl_ids(self):
-        return request.env['itlingo.dsl'].sudo().search([
-            ('maintainer_ids', 'in', request.env.user.ids),
+        Dsl = request.env['itlingo.dsl']
+        if not Dsl.has_access('read'):
+            return []
+        return Dsl.search([
+            ('family_id.maintainer_ids', 'in', request.env.user.ids),
         ]).ids
 
     def _can_access_dsl_area(self):
@@ -49,13 +66,16 @@ class ITLingoDslPortal(CustomerPortal):
             raise AccessError(_('You do not have access to DSL management.'))
 
     def _can_edit_dsl(self, dsl):
-        return self._itlingo_is_admin() or request.env.user in dsl.maintainer_ids
+        # Evaluate with the visitor's rights even when ``dsl`` is a catalog
+        # record read as superuser.
+        return dsl.with_env(request.env).has_access('write')
 
     def _can_view_dsl(self, dsl):
         return (
             dsl.family_id.active
             and dsl.status == 'active'
         ) or self._can_edit_dsl(dsl)
+
     def _require_dsl_view(self, dsl):
         if not self._can_view_dsl(dsl):
             raise MissingError(_('DSL not found.'))
@@ -64,18 +84,14 @@ class ITLingoDslPortal(CustomerPortal):
         """Domain for DSLs visible to the current website visitor."""
         if self._itlingo_is_admin():
             return []
-        if request.env.user._is_public():
-            return [
-                ('status', '=', 'active'),
-                ('family_id.active', '=', True),
-            ]
-        return [
-            '|',
-            '&',
+        public = [
             ('status', '=', 'active'),
             ('family_id.active', '=', True),
-            ('id', 'in', self._maintained_dsl_ids()),
         ]
+        maintained_ids = self._maintained_dsl_ids()
+        if not maintained_ids:
+            return public
+        return ['|', '&', *public, ('id', 'in', maintained_ids)]
 
     def _require_dsl_edit(self, dsl):
         if not self._can_edit_dsl(dsl):
@@ -101,14 +117,29 @@ class ITLingoDslPortal(CustomerPortal):
             raise AccessError(_('You do not have access to DSL definition files.'))
 
     def _dsl_or_404(self, dsl_id):
-        dsl = request.env['itlingo.dsl'].sudo().browse(dsl_id)
-        if not dsl.exists():
+        """Return the DSL the visitor may read, or raise 404.
+
+        Readers get the record in their own environment. Visitors without a
+        DSL ACL only reach active versions of active families, as superuser.
+        """
+        Dsl = request.env['itlingo.dsl']
+        if Dsl.has_access('read'):
+            dsl = Dsl.browse(dsl_id).exists()
+            if dsl and not dsl.has_access('read'):
+                dsl = Dsl
+        else:
+            dsl = Dsl.sudo().search([
+                ('id', '=', dsl_id),
+                ('status', '=', 'active'),
+                ('family_id.active', '=', True),
+            ])
+        if not dsl:
             raise MissingError(_('DSL not found.'))
         return dsl
 
     def _dsl_file_or_404(self, dsl, file_id):
-        line = request.env['itlingo.dsl.file'].sudo().browse(file_id)
-        if not line.exists() or line.dsl_id.id != dsl.id:
+        line = request.env['itlingo.dsl.file'].browse(file_id).exists()
+        if not line or not line.has_access('read') or line.dsl_id.id != dsl.id:
             raise MissingError(_('File not found.'))
         return line
 
@@ -116,7 +147,9 @@ class ITLingoDslPortal(CustomerPortal):
         domain = [('acronym', '=', acronym), ('version', '=', version)]
         if exclude_id:
             domain.append(('id', '!=', exclude_id))
-        return bool(request.env['itlingo.dsl'].sudo().search_count(domain))
+        # Admins see every version; maintainers see every version of their
+        # own family, which is the only family they can save into.
+        return bool(request.env['itlingo.dsl'].search_count(domain))
 
     def _dsl_form_values(self, post):
         return {
@@ -162,17 +195,9 @@ class ITLingoDslPortal(CustomerPortal):
     def _prepare_home_portal_values(self, counters):
         values = super()._prepare_home_portal_values(counters)
         if 'dsl_count' in counters:
-            if self._itlingo_is_admin():
-                values['dsl_count'] = request.env['itlingo.dsl'].sudo().search_count([])
-            else:
-                maintained_ids = self._maintained_dsl_ids()
-                values['dsl_count'] = request.env['itlingo.dsl'].sudo().search_count([
-                    '|',
-                    '&',
-                    ('status', '=', 'active'),
-                    ('family_id.active', '=', True),
-                    ('id', 'in', maintained_ids),
-                ])
+            values['dsl_count'] = self._dsl_model().search_count(
+                self._dsl_view_domain(),
+            )
         return values
 
     # ──────────────────────────────────────────────
@@ -183,7 +208,7 @@ class ITLingoDslPortal(CustomerPortal):
     def portal_dsl_list(self, page=1, **kw):
         is_admin = self._itlingo_is_admin()
         params = request.params
-        Dsl = request.env['itlingo.dsl'].sudo()
+        Dsl = self._dsl_model()
 
         # Everyone (including anonymous users) can consult the catalog;
         # edit/delete actions are rendered per row based on the user's rights.
@@ -213,8 +238,6 @@ class ITLingoDslPortal(CustomerPortal):
 
         if is_admin:
             editable_dsl_ids = set(dsls.ids)
-        elif request.env.user._is_public():
-            editable_dsl_ids = set()
         else:
             editable_dsl_ids = set(self._maintained_dsl_ids())
 
@@ -262,7 +285,7 @@ class ITLingoDslPortal(CustomerPortal):
                 values['error'] = error
             else:
                 try:
-                    dsl = request.env['itlingo.dsl'].sudo().create(
+                    dsl = request.env['itlingo.dsl'].create(
                         self._dsl_write_vals(vals),
                     )
                 except (UserError, ValidationError) as err:
@@ -280,12 +303,16 @@ class ITLingoDslPortal(CustomerPortal):
     def portal_dsl_edit(self, dsl_id, **post):
         dsl = self._dsl_or_404(dsl_id)
         self._require_dsl_view(dsl)
+        # Access is decided above with the visitor's rights; the page then
+        # displays the record (including related user names, which portal
+        # users cannot read) as superuser. Writes below use ``dsl``.
+        display_dsl = dsl.sudo()
         if not self._can_edit_dsl(dsl):
             if request.httprequest.method == 'POST':
                 raise AccessError(_('You can only edit DSLs you maintain.'))
             values = self._prepare_portal_layout_values()
             values.update({
-                'dsl': dsl,
+                'dsl': display_dsl,
                 'page_name': 'dsl_view',
                 'can_view_dsl_files': self._can_view_dsl_files(dsl),
             })
@@ -294,10 +321,10 @@ class ITLingoDslPortal(CustomerPortal):
             )
         values = self._prepare_portal_layout_values()
         values.update({
-            'dsl': dsl,
+            'dsl': display_dsl,
             'page_name': 'dsl_edit',
             'status_selection': dsl._fields['status'].selection,
-            'maintainers': dsl.maintainer_ids,
+            'maintainers': display_dsl.maintainer_ids,
             'can_manage_dsls': self._itlingo_is_admin(),
             'form': {},
             'error': {},
@@ -305,7 +332,7 @@ class ITLingoDslPortal(CustomerPortal):
             'dsl_error': request.params.get('error'),
             'can_edit_grammar': dsl.status == 'draft',
             'can_validate_draft': dsl.status == 'draft',
-            'dsl_versions': request.env['itlingo.dsl'].sudo().search(
+            'dsl_versions': request.env['itlingo.dsl'].search(
                 [('family_id', '=', dsl.family_id.id)], order='version desc',
             ),
             'suggested_version': dsl._suggest_next_version(),
@@ -346,12 +373,11 @@ class ITLingoDslPortal(CustomerPortal):
     @route('/dsl/<int:dsl_id>/publish', type='http', auth='user',
            website=True, methods=['POST'])
     def portal_dsl_publish(self, dsl_id, **post):
-        dsl = self._dsl_or_404(dsl_id)
         self._itlingo_admin_or_raise()
+        dsl = self._dsl_or_404(dsl_id)
         try:
-            # ``dsl`` is sudo'd for access rights but keeps the request user,
-            # so the publication audit records the real publisher. The server
-            # revalidates the grammar; browser-reported validity is ignored.
+            # The server revalidates the grammar; browser-reported validity
+            # is ignored. The audit records the request user as publisher.
             dsl.action_publish()
         except (UserError, ValidationError) as err:
             request.session['dsl_publish_error'] = str(err)
@@ -408,7 +434,7 @@ class ITLingoDslPortal(CustomerPortal):
             'file_name': upload.filename,
         } for upload in uploads]
         try:
-            request.env['itlingo.dsl.file'].sudo().create(vals_list)
+            request.env['itlingo.dsl.file'].create(vals_list)
         except (UserError, ValidationError) as err:
             request.session['dsl_upload_error'] = str(err)
             return request.redirect(f'/dsl/{dsl.id}?error=upload_failed')
@@ -513,6 +539,8 @@ class ITLingoDslPortal(CustomerPortal):
         email = (post.get('email') or '').strip()
         if not email:
             return request.redirect(f'/dsl/{dsl.id}?error=maint_email_required')
+        # Admins may assign any user, including ones their own record rules
+        # hide (portal admins cannot read other users).
         Users = request.env['res.users'].sudo()
         user = Users.search([('login', '=', email)], limit=1)
         if not user:
@@ -521,9 +549,12 @@ class ITLingoDslPortal(CustomerPortal):
             user = Users.search([('email', '=ilike', email)], limit=1)
         if not user:
             return request.redirect(f'/dsl/{dsl.id}?error=maint_user_not_found')
-        if user in dsl.maintainer_ids:
+        family = dsl.family_id
+        if user in family.sudo().maintainer_ids:
             return request.redirect(f'/dsl/{dsl.id}?error=maint_already')
-        dsl.write({'maintainer_ids': [(4, user.id)]})
+        # Maintainers belong to the family. Link/unlink commands on the
+        # stored relation never replace maintainers hidden from the admin.
+        family.write({'maintainer_ids': [(4, user.id)]})
         return request.redirect(f'/dsl/{dsl.id}?message=maint_added')
 
     @route('/dsl/<int:dsl_id>/maintainers/<int:user_id>/remove', type='http',
@@ -531,7 +562,7 @@ class ITLingoDslPortal(CustomerPortal):
     def portal_dsl_maintainer_remove(self, dsl_id, user_id, **post):
         self._itlingo_admin_or_raise()
         dsl = self._dsl_or_404(dsl_id)
-        dsl.write({'maintainer_ids': [(3, user_id)]})
+        dsl.family_id.write({'maintainer_ids': [(3, user_id)]})
         return request.redirect(f'/dsl/{dsl.id}?message=maint_removed')
 
     # ──────────────────────────────────────────────

@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 from odoo import _, http
 from odoo.exceptions import AccessError, MissingError, UserError, ValidationError
 from odoo.http import request, route, content_disposition
+from odoo.tools import email_normalize
 from odoo.addons.portal.controllers.portal import CustomerPortal
 from odoo.addons.itlingo_core.controllers.pagination import (
     PORTAL_PAGE_STEP, paginate,
@@ -59,7 +60,7 @@ class ITLingoPortal(CustomerPortal):
 
         if request.httprequest.method == 'POST':
             if post.get('skip'):
-                user.sudo().org_setup_pending = False
+                user.org_setup_pending = False
                 return request.redirect('/')
 
             name = (post.get('name') or '').strip()
@@ -77,20 +78,13 @@ class ITLingoPortal(CustomerPortal):
             elif country_id and country_id not in countries.ids:
                 values['error']['name'] = _('Invalid country.')
             else:
-                Org = request.env['itlingo.organization'].sudo()
-                Role = request.env['itlingo.organization.role'].sudo()
-                org = Org.create({
+                # The model makes the creator the organization manager.
+                request.env['itlingo.organization'].create({
                     'name': name,
                     'activity_type': activity,
                     'country_id': country_id or False,
                 })
-                Role.create({
-                    'organization_id': org.id,
-                    'user_id': user.id,
-                    'role': 'org_manager',
-                    'state': 'accepted',
-                })
-                user.sudo().org_setup_pending = False
+                user.org_setup_pending = False
                 return request.redirect('/')
 
         return request.render(
@@ -100,39 +94,8 @@ class ITLingoPortal(CustomerPortal):
     @route('/welcome/skip-organization', type='http', auth='user',
            website=True, methods=['POST'])
     def welcome_skip_organization(self, **post):
-        request.env.user.sudo().org_setup_pending = False
+        request.env.user.org_setup_pending = False
         return request.redirect('/')
-
-    def _send_signup_invitation_email(self, email):
-        base_url = request.env['ir.config_parameter'].sudo().get_param('web.base.url')
-        signup_url = f'{base_url}/web/signup'
-        company = request.env.company
-        body = (
-            '<div style="font-family: Arial, sans-serif; max-width: 600px;">'
-            '<h2>You\'ve been invited to ITLingo Cloud</h2>'
-            '<p>Hello,</p>'
-            '<p>You have been invited to collaborate on '
-            '<strong>ITLingo Cloud</strong>.</p>'
-            '<p>Create your account using the email address '
-            'this message was sent to:</p>'
-            '<p style="margin: 24px 0;">'
-            f'<a href="{signup_url}" '
-            'style="background-color: #714B67; color: white; '
-            'padding: 12px 24px; text-decoration: none; '
-            'border-radius: 4px; display: inline-block;">'
-            'Create Account</a></p>'
-            '<p style="color: #666; font-size: 12px;">'
-            'If the button doesn\'t work, copy and paste this link '
-            f'into your browser:<br/>{signup_url}</p>'
-            '</div>'
-        )
-        mail = request.env['mail.mail'].sudo().create({
-            'subject': "You've been invited to join ITLingo Cloud",
-            'body_html': body,
-            'email_to': email,
-            'email_from': company.email_formatted or company.email or '',
-        })
-        mail.send()
 
     # ──────────────────────────────────────────────
     # Shared list sorting (3-click cycle: asc / desc / none)
@@ -165,14 +128,26 @@ class ITLingoPortal(CustomerPortal):
         # doseq: multi-select filters put lists in url_args
         return urlencode(url_args, doseq=True) if url_args else ''
 
+    def _portal_user_ids_matching(self, name_q):
+        """User ids whose name or login contains ``name_q``. Portal users
+        cannot search other accounts; callers intersect the result with
+        role rows that the record rules already let them read."""
+        return request.env['res.users'].sudo().search([
+            '|', ('name', 'ilike', name_q), ('login', 'ilike', name_q),
+        ]).ids
+
     def _portal_workspace_role(self, user, project_id):
-        return request.env['itlingo.project.role'].sudo().search([
+        if user._is_public():
+            return request.env['itlingo.project.role'].browse()
+        return request.env['itlingo.project.role'].search([
             ('user_id', '=', user.id),
             ('project_id', '=', project_id),
             ('state', '=', 'accepted'),
         ], limit=1)
 
     def _portal_public_workspace_project(self, project_id):
+        # Public hub (auth='public'): anonymous visitors have no ORM rights,
+        # so this read-only path uses sudo and is limited to public workspaces.
         project = request.env['itlingo.workspace'].sudo().browse(project_id)
         if project.exists() and project.is_public_workspace:
             return project
@@ -209,14 +184,14 @@ class ITLingoPortal(CustomerPortal):
         user = request.env.user
 
         if 'organization_count' in counters:
-            org_roles = request.env['itlingo.organization.role'].sudo().search([
+            org_roles = request.env['itlingo.organization.role'].search([
                 ('user_id', '=', user.id),
                 ('state', '=', 'accepted'),
             ])
             values['organization_count'] = len(org_roles)
 
         if 'workspace_count' in counters:
-            ws_roles = request.env['itlingo.project.role'].sudo().search([
+            ws_roles = request.env['itlingo.project.role'].search([
                 ('user_id', '=', user.id),
                 ('state', '=', 'accepted'),
             ])
@@ -230,7 +205,7 @@ class ITLingoPortal(CustomerPortal):
 
     def _portal_org_access(self, org_id):
         """Return (organization, user_role) or raise."""
-        org = request.env['itlingo.organization'].sudo().browse(org_id)
+        org = request.env['itlingo.organization'].browse(org_id)
         if not org.exists():
             raise MissingError(_('Organization not found.'))
         user_role = self._portal_org_user_role(org_id)
@@ -240,21 +215,22 @@ class ITLingoPortal(CustomerPortal):
 
     def _portal_org_user_role(self, org_id):
         """Return the current user's accepted organization role, if any."""
-        return request.env['itlingo.organization.role'].sudo().search([
+        return request.env['itlingo.organization.role'].search([
             ('user_id', '=', request.env.user.id),
             ('organization_id', '=', org_id),
             ('state', '=', 'accepted'),
         ], limit=1)
 
     def _portal_org_role_line(self, org_id, role_id):
-        Role = request.env['itlingo.organization.role'].sudo()
-        line = Role.browse(role_id)
-        if not line.exists() or line.organization_id.id != org_id:
+        line = request.env['itlingo.organization.role'].search([
+            ('id', '=', role_id), ('organization_id', '=', org_id),
+        ])
+        if not line:
             raise MissingError(_('Member not found.'))
         return line
 
     def _portal_org_accepted_manager_count(self, org_id):
-        Role = request.env['itlingo.organization.role'].sudo()
+        Role = request.env['itlingo.organization.role']
         return Role.search_count([
             ('organization_id', '=', org_id),
             ('state', '=', 'accepted'),
@@ -266,7 +242,7 @@ class ITLingoPortal(CustomerPortal):
         name_q = (params.get('name') or '').strip()
         if name_q:
             domain.append(('name', 'ilike', f'%{name_q}%'))
-        Org = request.env['itlingo.organization'].sudo()
+        Org = request.env['itlingo.organization']
         activities = [
             a for a in self._portal_multi_params('activity')
             if a in dict(Org._fields['activity_type'].selection)
@@ -312,7 +288,7 @@ class ITLingoPortal(CustomerPortal):
 
     def _portal_ws_list_filtered_project_ids(self, user, params):
         """Return (project_ids, role_map dict) after role filter."""
-        WsRole = request.env['itlingo.project.role'].sudo()
+        WsRole = request.env['itlingo.project.role']
         roles = WsRole.search([
             ('user_id', '=', user.id),
             ('state', '=', 'accepted'),
@@ -361,7 +337,7 @@ class ITLingoPortal(CustomerPortal):
     def portal_my_organizations(self, page=1, **kw):
         user = request.env.user
         params = request.params
-        OrgRole = request.env['itlingo.organization.role'].sudo()
+        OrgRole = request.env['itlingo.organization.role']
 
         roles = OrgRole.search([
             ('user_id', '=', user.id),
@@ -375,7 +351,7 @@ class ITLingoPortal(CustomerPortal):
             role.organization_id.id for role in roles
             if not role_keys or role.role in role_keys
         ]
-        Org = request.env['itlingo.organization'].sudo()
+        Org = request.env['itlingo.organization']
         domain, name_q = self._portal_org_list_filters_domain(org_ids, params)
         url_args = self._portal_org_list_url_args(params, name_q)
 
@@ -455,18 +431,11 @@ class ITLingoPortal(CustomerPortal):
             elif country_id and country_id not in countries.ids:
                 values['error']['name'] = _('Invalid country.')
             else:
-                Org = request.env['itlingo.organization'].sudo()
-                Role = request.env['itlingo.organization.role'].sudo()
-                org = Org.create({
+                # The model makes the creator the organization manager.
+                org = request.env['itlingo.organization'].create({
                     'name': name,
                     'activity_type': activity,
                     'country_id': country_id or False,
-                })
-                Role.create({
-                    'organization_id': org.id,
-                    'user_id': request.env.user.id,
-                    'role': 'org_manager',
-                    'state': 'accepted',
                 })
                 return request.redirect(f'/my/organizations/{org.id}')
         return request.render('itlingo_website_portal.portal_organization_new', values)
@@ -481,12 +450,13 @@ class ITLingoPortal(CustomerPortal):
             raise AccessError(
                 _('Only organization managers can delete this organization.'),
             )
-        Project = request.env['itlingo.workspace'].sudo()
-        if Project.search_count([('organization_id', '=', org_id)]):
+        try:
+            # The model refuses to delete an organization with workspaces.
+            org.unlink()
+        except UserError:
             return request.redirect(
                 '/my/organizations?error=org_delete_has_workspaces',
             )
-        org.unlink()
         return request.redirect('/my/organizations?message=org_deleted')
 
     @route(
@@ -494,10 +464,10 @@ class ITLingoPortal(CustomerPortal):
         type='http', auth='user', website=True, methods=['POST'],
     )
     def portal_organization_users_invite(self, org_id, **post):
-        _, actor_role = self._portal_org_access(org_id)
+        _org, actor_role = self._portal_org_access(org_id)
         if actor_role.role != 'org_manager':
             raise AccessError(_('Only organization managers can invite members.'))
-        email = (post.get('email') or '').strip()
+        email = email_normalize(post.get('email') or '')
         role_key = post.get('role') or 'org_member'
         allowed_roles = {'org_manager', 'org_member', 'doc_manager'}
         if role_key not in allowed_roles:
@@ -508,66 +478,65 @@ class ITLingoPortal(CustomerPortal):
             return request.redirect(
                 f'/my/organizations/{org_id}/users?error=invite_email_required',
             )
-        Users = request.env['res.users'].sudo()
-        invitee = Users.search([('login', '=', email)], limit=1)
-        if not invitee:
-            invitee = Users.search([('login', '=ilike', email)], limit=1)
-        if not invitee:
-            invitee = Users.search([('email', '=ilike', email)], limit=1)
-        if not invitee:
-            Pending = request.env['itlingo.pending.invitation'].sudo()
-            already_pending = Pending.search([
-                ('email', '=ilike', email),
-                ('organization_id', '=', org_id),
-            ], limit=1)
-            if already_pending:
-                self._send_signup_invitation_email(email)
-                return request.redirect(
-                    f'/my/organizations/{org_id}/users?message=invite_resent',
-                )
-            partner = request.env['res.partner'].sudo().search(
-                [('email', '=ilike', email)], limit=1,
-            )
-            if not partner:
-                partner = request.env['res.partner'].sudo().create({
-                    'name': email.split('@')[0],
-                    'email': email,
-                })
-            Pending.create({
-                'email': email,
-                'organization_id': org_id,
-                'role': role_key,
-                'invited_by_id': request.env.user.id,
-            })
-            self._send_signup_invitation_email(email)
-            return request.redirect(
-                f'/my/organizations/{org_id}/users?message=invite_sent',
-            )
-        Role = request.env['itlingo.organization.role'].sudo()
-        existing = Role.search([
-            ('organization_id', '=', org_id),
-            ('user_id', '=', invitee.id),
-        ], limit=1)
-        if existing:
-            return request.redirect(
-                f'/my/organizations/{org_id}/users?error=invite_already_member',
-            )
-        Role.create({
-            'organization_id': org_id,
-            'user_id': invitee.id,
-            'role': role_key,
-            'state': 'pending',
-        })
+        message = self._portal_send_invitation(email, role_key, {'organization_id': org_id})
         return request.redirect(
-            f'/my/organizations/{org_id}/users?message=invite_sent',
+            f'/my/organizations/{org_id}/users?message={message}',
         )
+
+    def _portal_send_invitation(self, email, role_key, scope):
+        """Every email invitation, also to an address that already has an
+        account, waits for the proof link mailed to that address. The resend
+        keeps the role of the open invitation."""
+        Pending = request.env['itlingo.pending.invitation']
+        pending = Pending.search(
+            [('email', '=', email)] + [(k, '=', v) for k, v in scope.items()], limit=1)
+        if pending:
+            pending._send_signup_email()
+            return 'invite_resent'
+        Pending.create(dict(scope, email=email, role=role_key))._send_signup_email()
+        return 'invite_sent'
+
+    @route('/itlingo/invitation', type='http', auth='public', website=True,
+           methods=['GET'], sitemap=False)
+    def itlingo_invitation(self, token=None, **kw):
+        """Landing of the emailed proof link. GET only shows: the confirmation
+        for the account of the invited email, sign-in or native signup for a
+        visitor, or a refusal. Nothing is granted here."""
+        Pending = request.env['itlingo.pending.invitation']
+        invitations = Pending._from_token(token)
+        user = request.env.user
+        values = {'invitations': invitations, 'token': token, 'state': 'invalid'}
+        if invitations:
+            here = '/itlingo/invitation?' + urlencode({'token': token})
+            values.update(
+                invited_email=invitations[0].email,
+                login_url='/web/login?' + urlencode({'redirect': here}),
+                logout_url='/web/session/logout?' + urlencode({'redirect': here}),
+                signup_url='/web/signup?' + urlencode({
+                    'token': token, 'redirect': invitations[0]._scope_url()}),
+            )
+            if user._is_public():
+                values['state'] = 'visitor'
+            elif Pending._proof_matches(invitations, user):
+                values['state'] = 'confirm'
+            else:
+                values['state'] = 'wrong_account'
+        return request.render('itlingo_website_portal.portal_invitation_confirm', values)
+
+    @route('/itlingo/invitation/accept', type='http', auth='user', website=True,
+           methods=['POST'], sitemap=False)
+    def itlingo_invitation_accept(self, token=None, **kw):
+        url = request.env['itlingo.pending.invitation']._claim_with_token(token, request.env.user)
+        if not url:
+            raise AccessError(_('This invitation link is not valid for your account.'))
+        return request.redirect(url)
 
     @route(
         '/my/organizations/<int:org_id>/users/<int:role_id>/role',
         type='http', auth='user', website=True, methods=['POST'],
     )
     def portal_organization_user_role(self, org_id, role_id, **post):
-        _, actor_role = self._portal_org_access(org_id)
+        _org, actor_role = self._portal_org_access(org_id)
         if actor_role.role != 'org_manager':
             raise AccessError(_('Only organization managers can change roles.'))
         target = self._portal_org_role_line(org_id, role_id)
@@ -597,7 +566,7 @@ class ITLingoPortal(CustomerPortal):
         type='http', auth='user', website=True, methods=['POST'],
     )
     def portal_organization_user_remove(self, org_id, role_id, **post):
-        _, actor_role = self._portal_org_access(org_id)
+        _org, actor_role = self._portal_org_access(org_id)
         if actor_role.role != 'org_manager':
             raise AccessError(_('Only organization managers can remove members.'))
         target = self._portal_org_role_line(org_id, role_id)
@@ -621,22 +590,18 @@ class ITLingoPortal(CustomerPortal):
     )
     def portal_organization_leave(self, org_id, **post):
         org, user_role = self._portal_org_access(org_id)
-        OrgRole = request.env['itlingo.organization.role'].sudo()
-        accepted = OrgRole.search([
-            ('organization_id', '=', org_id),
-            ('state', '=', 'accepted'),
-        ])
-        if len(accepted) <= 1:
-            Project = request.env['itlingo.workspace'].sudo()
-            if Project.search_count([('organization_id', '=', org_id)]):
-                return request.redirect(
-                    '/my/organizations?error=org_delete_has_workspaces',
-                )
+        # member_count is the true total even for members who see one row.
+        if org.member_count <= 1:
             try:
-                org.sudo().unlink()
-            except UserError:
+                # Refused by the model when workspaces remain.
+                org.unlink()
+            except AccessError:
                 return request.redirect(
                     f'/my/organizations/{org_id}/users?error=leave_failed',
+                )
+            except UserError:
+                return request.redirect(
+                    '/my/organizations?error=org_delete_has_workspaces',
                 )
             return request.redirect('/my/organizations?message=org_deleted_self_leave')
         is_last_manager = (
@@ -656,7 +621,7 @@ class ITLingoPortal(CustomerPortal):
         org, user_role = self._portal_org_access(org_id)
         if user_role.role != 'org_manager':
             return request.redirect(f'/my/organizations/{org_id}/users')
-        OrgRole = request.env['itlingo.organization.role'].sudo()
+        OrgRole = request.env['itlingo.organization.role']
         candidates = OrgRole.search([
             ('organization_id', '=', org_id),
             ('state', '=', 'accepted'),
@@ -668,7 +633,8 @@ class ITLingoPortal(CustomerPortal):
         values.update({
             'organization': org,
             'user_role': user_role,
-            'candidates': candidates,
+            # Display only: the user's name is not readable by portal users.
+            'candidates': candidates.sudo(),
             'organization_hub': True,
             'org_hub_page': 'users',
             'page_name': 'organization_leave_promote',
@@ -730,7 +696,7 @@ class ITLingoPortal(CustomerPortal):
 
     def _portal_documents_list_ctx(self, base_domain, params,
                                    page_url=None, page=1,
-                                   step=PORTAL_PAGE_STEP):
+                                   step=PORTAL_PAGE_STEP, sudo_read=False):
         """Shared filter + sort handling for portal document lists.
 
         Applies the filter bar params (name, language, format, type, dsl) and
@@ -738,9 +704,14 @@ class ITLingoPortal(CustomerPortal):
         template context (documents, filter values, dropdown options, sort
         state). Callers still set ``sort_base_url``. When ``page_url`` is
         given the list is paginated (``step`` rows per page) and a ``pager``
-        is included in the context.
+        is included in the context. ``sudo_read`` is for the two checked
+        read-only paths that the record rules do not cover: the public hub
+        (anonymous visitors) and a workspace member's view of the published
+        organization documents. The caller's domain must keep it to those.
         """
-        Document = request.env['itlingo.document'].sudo()
+        Document = request.env['itlingo.document']
+        if sudo_read:
+            Document = Document.sudo()
         domain = list(base_domain)
         filter_args = {}
 
@@ -886,7 +857,8 @@ class ITLingoPortal(CustomerPortal):
 
     def _portal_document_form_meta(self, document=None):
         """Dropdown data for the shared Language / DSL form fields."""
-        Document = request.env['itlingo.document'].sudo()
+        Document = request.env['itlingo.document']
+        # DSL references may point to families the user cannot read.
         document = document.sudo() if document else None
         families = self._portal_visible_dsl_families()
         versions = self._portal_selectable_dsl_versions(families)
@@ -905,7 +877,7 @@ class ITLingoPortal(CustomerPortal):
 
     def _portal_document_meta_vals(self, post, document=None):
         """Parse and validate the shared Language / DSL form inputs."""
-        Document = request.env['itlingo.document'].sudo()
+        Document = request.env['itlingo.document']
         Family = request.env['itlingo.dsl.family'].sudo()
         Dsl = request.env['itlingo.dsl'].sudo()
         document = document.sudo() if document else None
@@ -956,9 +928,10 @@ class ITLingoPortal(CustomerPortal):
         ``document`` is None so the caller can answer 404.
         """
         project, user_role = self._portal_ws_access(project_id)
-        doc = request.env['itlingo.document'].sudo().browse(document_id)
+        # Search, not browse: a document hidden by the record rules is a 404.
+        doc = request.env['itlingo.document'].search([('id', '=', document_id)])
         if (
-            not doc.exists()
+            not doc
             or doc.project_id.id != project_id
             or (
                 user_role.role not in self._DOC_EDIT_WS_ROLES
@@ -977,10 +950,13 @@ class ITLingoPortal(CustomerPortal):
         """
         project, workspace_role = self._portal_ws_access(project_id)
         org = project.organization_id
-        doc = request.env['itlingo.document'].sudo().browse(document_id)
+        # Workspace membership grants this read-only view, not an
+        # organization role: the record rules do not, so read with sudo
+        # after the workspace check and the scope/status checks below.
+        doc = request.env['itlingo.document'].sudo().browse(document_id).exists()
         if (
             not org
-            or not doc.exists()
+            or not doc
             or doc.project_id
             or doc.organization_id.id != org.id
             or doc.status != 'published'
@@ -991,9 +967,9 @@ class ITLingoPortal(CustomerPortal):
     def _portal_org_document_or_404(self, org_id, document_id):
         """Return (organization, user_role, document) for an org document."""
         org, user_role = self._portal_org_access(org_id)
-        doc = request.env['itlingo.document'].sudo().browse(document_id)
+        doc = request.env['itlingo.document'].search([('id', '=', document_id)])
         if (
-            not doc.exists()
+            not doc
             or doc.project_id
             or doc.organization_id.id != org_id
             or (
@@ -1028,7 +1004,7 @@ class ITLingoPortal(CustomerPortal):
         ``extra_values`` lets callers inject hub-shell context (sidebar +
         breadcrumbs) so the edit page keeps the surrounding chrome.
         """
-        DocType = request.env['itlingo.document.type'].sudo()
+        DocType = request.env['itlingo.document.type']
         doc_types = DocType.search([], order='name')
         status_selection = document._fields['status'].selection
         template_type = request.env.ref(
@@ -1038,7 +1014,8 @@ class ITLingoPortal(CustomerPortal):
         has_pattern = 'output_filename_pattern' in document._fields
         values = self._prepare_portal_layout_values()
         values.update({
-            'document': document,
+            # Display only (author name); the write below runs as the user.
+            'document': document.sudo(),
             'doc_base_url': doc_base_url,
             'doc_types': doc_types,
             'status_selection': status_selection,
@@ -1113,7 +1090,10 @@ class ITLingoPortal(CustomerPortal):
                         write_vals['file_name'] = upload.filename
                         write_vals['document_file'] = base64.b64encode(upload.read())
                     try:
-                        document.sudo().write(write_vals)
+                        # The user's own rights decide, also when the
+                        # document came from a read-only sudo lookup.
+                        with request.env.cr.savepoint():
+                            document.with_env(request.env).write(write_vals)
                     except (UserError, ValidationError) as err:
                         values['error']['_form'] = str(err)
                     else:
@@ -1130,7 +1110,7 @@ class ITLingoPortal(CustomerPortal):
             raise AccessError(
                 _('Only organization or document managers can add documents.'),
             )
-        DocType = request.env['itlingo.document.type'].sudo()
+        DocType = request.env['itlingo.document.type']
         doc_types = DocType.search([], order='name')
         values = self._prepare_portal_layout_values()
         values.update({
@@ -1176,7 +1156,8 @@ class ITLingoPortal(CustomerPortal):
                         **self._portal_document_meta_vals(post),
                     }
                     self._apply_template_vals(doc_vals, post)
-                    request.env['itlingo.document'].sudo().create(doc_vals)
+                    with request.env.cr.savepoint():
+                        request.env['itlingo.document'].create(doc_vals)
                 except (UserError, ValidationError) as err:
                     values['error']['_form'] = str(err)
                 else:
@@ -1195,7 +1176,7 @@ class ITLingoPortal(CustomerPortal):
         org, user_role = self._portal_org_access(org_id)
         params = request.params
         base_url = f'/my/organizations/{org_id}/workspaces'
-        Project = request.env['itlingo.workspace'].sudo()
+        Project = request.env['itlingo.workspace']
 
         # Same filter panel behavior as "My Workspaces" (name, your roles,
         # visibility), plus a status filter used by the dashboard counters.
@@ -1305,7 +1286,8 @@ class ITLingoPortal(CustomerPortal):
             return request.not_found()
         values = self._prepare_portal_layout_values()
         values.update({
-            'document': document,
+            # Display only (author name); access was checked by the lookup.
+            'document': document.sudo(),
             'document_scope': 'organization',
             'doc_base_url': f'/my/organizations/{org_id}/documents',
             'can_edit_document': user_role.role in self._DOC_EDIT_ORG_ROLES,
@@ -1357,7 +1339,7 @@ class ITLingoPortal(CustomerPortal):
             raise AccessError(_('You cannot delete this document.'))
         base_url = f'/my/organizations/{org_id}/documents'
         try:
-            document.sudo().unlink()
+            document.unlink()
         except UserError:
             return request.redirect(f'{base_url}/{document_id}?error=delete_failed')
         return request.redirect(f'{base_url}?message=doc_deleted')
@@ -1383,13 +1365,12 @@ class ITLingoPortal(CustomerPortal):
         org, user_role = self._portal_org_access(org_id)
         params = request.params
         base_url = f'/my/organizations/{org_id}/users'
-        OrgRole = request.env['itlingo.organization.role'].sudo()
+        OrgRole = request.env['itlingo.organization.role']
         can_see_all_members = user_role.role == 'org_manager'
 
-        # Only an org manager may see other members: the listing runs with
-        # sudo(), so the restriction has to be in the domain, and the filter
-        # parameters are ignored for everyone else so they cannot be used to
-        # probe for another user's name, login or role.
+        # Only an org manager may see other members. The record rules enforce
+        # it; the filter parameters are also ignored for everyone else so they
+        # cannot be used to probe for another user's name, login or role.
         domain = [
             ('organization_id', '=', org_id),
             ('state', '=', 'accepted'),
@@ -1400,9 +1381,7 @@ class ITLingoPortal(CustomerPortal):
         if can_see_all_members:
             name_q = (params.get('name') or '').strip()
             if name_q:
-                domain += ['|',
-                           ('user_id.name', 'ilike', f'%{name_q}%'),
-                           ('user_id.login', 'ilike', f'%{name_q}%')]
+                domain.append(('user_id', 'in', self._portal_user_ids_matching(name_q)))
                 url_args['name'] = name_q
             role_keys = [
                 key for key in self._ORG_ROLE_FILTER_KEYS
@@ -1440,7 +1419,8 @@ class ITLingoPortal(CustomerPortal):
         values.update({
             'organization': org,
             'user_role': user_role,
-            'members': members,
+            # Display only (user names); rows come from the rule-filtered search.
+            'members': members.sudo(),
             'member_count': org.member_count,
             'pager': page_detail,
             'users_filters': {
@@ -1871,7 +1851,7 @@ class ITLingoPortal(CustomerPortal):
 
         # Workspaces: total + per business status, each linked to the
         # workspaces list filtered by that status.
-        Project = request.env['itlingo.workspace'].sudo()
+        Project = request.env['itlingo.workspace']
         ws_dom = [('organization_id', '=', org_id)]
         ws_counts = dict(Project._read_group(
             ws_dom, groupby=['business_status'], aggregates=['__count'],
@@ -1889,7 +1869,7 @@ class ITLingoPortal(CustomerPortal):
 
         # Documents: total + breakdown by type and by DSL, linked to the
         # documents list with the matching filter preset.
-        Document = request.env['itlingo.document'].sudo()
+        Document = request.env['itlingo.document']
         doc_dom = self._portal_org_document_domain(org_id, user_role)
         doc_total = Document.search_count(doc_dom)
         doc_type_rows = [
@@ -1906,7 +1886,8 @@ class ITLingoPortal(CustomerPortal):
         doc_dsl_rows = [
             {
                 'label': (
-                    f'{family.acronym} - {family.name}'.strip(' -')
+                    # Label only: a referenced DSL family can be archived.
+                    f'{family.sudo().acronym} - {family.sudo().name}'.strip(' -')
                     if family else 'No DSL'
                 ),
                 'count': count,
@@ -1922,6 +1903,8 @@ class ITLingoPortal(CustomerPortal):
         ]
 
         # Users: total + per role, linked to the users list role filter.
+        # Aggregate count only (no identities): members see the true per-role
+        # totals although they read only their own role row.
         OrgRole = request.env['itlingo.organization.role'].sudo()
         role_dom = [('organization_id', '=', org_id), ('state', '=', 'accepted')]
         role_counts = dict(OrgRole._read_group(
@@ -2017,7 +2000,7 @@ class ITLingoPortal(CustomerPortal):
     def _portal_workspace_creation_organizations(self, user=None):
         """Return organizations where ``user`` may create a workspace."""
         user = user or request.env.user
-        roles = request.env['itlingo.organization.role'].sudo().search([
+        roles = request.env['itlingo.organization.role'].search([
             ('user_id', '=', user.id),
             ('state', '=', 'accepted'),
             ('role', 'in', self._WORKSPACE_CREATE_ORG_ROLES),
@@ -2030,7 +2013,7 @@ class ITLingoPortal(CustomerPortal):
         user = request.env.user
         params = request.params
         project_ids, role_map = self._portal_ws_list_filtered_project_ids(user, params)
-        Project = request.env['itlingo.workspace'].sudo()
+        Project = request.env['itlingo.workspace']
         domain, name_q = self._portal_ws_list_filters_domain(project_ids, params)
         url_args = self._portal_ws_list_url_args(params, name_q)
 
@@ -2236,7 +2219,7 @@ class ITLingoPortal(CustomerPortal):
             **self._portal_documents_list_ctx(
                 [('project_id', '=', project_id), ('status', '=', 'published')],
                 request.params,
-                page_url=base_url, page=page),
+                page_url=base_url, page=page, sudo_read=True),
             'sort_base_url': base_url,
         })
         return request.render(
@@ -2341,7 +2324,7 @@ class ITLingoPortal(CustomerPortal):
             )
         transition = (post.get('transition') or '').strip()
         base_url = f'/my/workspaces/{project_id}'
-        proj = project.sudo()
+        proj = project
         try:
             if transition == 'executing':
                 proj.action_start()
@@ -2366,7 +2349,7 @@ class ITLingoPortal(CustomerPortal):
         if user_role.role != 'ws_manager':
             raise AccessError(_('Only workspace managers can delete a workspace.'))
         try:
-            project.sudo().unlink()
+            project.unlink()
         except UserError:
             return request.redirect('/my/workspaces?error=ws_delete_failed')
         return request.redirect('/my/workspaces?message=ws_deleted')
@@ -2464,8 +2447,7 @@ class ITLingoPortal(CustomerPortal):
                 if wizard.get('organization_id') not in organizations.ids:
                     return request.redirect('/my/workspaces/new/step/1')
                 sess.pop(self._WS_NEW_SESSION_KEY, None)
-                Project = request.env['itlingo.workspace'].sudo()
-                WsRole = request.env['itlingo.project.role'].sudo()
+                Project = request.env['itlingo.workspace']
                 vals = {
                     'name': wizard['name'],
                     'organization_id': wizard['organization_id'],
@@ -2475,13 +2457,8 @@ class ITLingoPortal(CustomerPortal):
                 for f in ('planned_start', 'planned_end', 'actual_start', 'actual_end'):
                     if wizard.get(f):
                         vals[f] = wizard[f]
+                # The model makes the creator the workspace manager.
                 project = Project.create(vals)
-                WsRole.create({
-                    'project_id': project.id,
-                    'user_id': user.id,
-                    'role': 'ws_manager',
-                    'state': 'accepted',
-                })
                 project.message_subscribe(partner_ids=user.partner_id.ids)
                 return request.redirect(f'/my/workspaces/{project.id}')
 
@@ -2499,12 +2476,12 @@ class ITLingoPortal(CustomerPortal):
             values['form'] = {'description': wizard.get('description') or ''}
         elif step == 4:
             w = wizard
-            org = request.env['itlingo.organization'].sudo().browse(
-                w.get('organization_id', 0),
+            org = organizations.filtered(
+                lambda o: o.id == w.get('organization_id', 0),
             )
             values['wizard_data'] = {
                 'name': w.get('name'),
-                'organization': org.name if org.exists() else '',
+                'organization': org.name or '',
                 'is_public_workspace': bool(w.get('is_public_workspace')),
                 'planned_start': w.get('planned_start'),
                 'planned_end': w.get('planned_end'),
@@ -2546,7 +2523,7 @@ class ITLingoPortal(CustomerPortal):
             raise AccessError(_('Only workspace managers can change workspace settings.'))
         if step < 1 or step > 4:
             return request.redirect(f'/my/workspaces/{project_id}/settings/1')
-        proj = project.sudo()
+        proj = project
         values = self._prepare_portal_layout_values()
         values.update({
             'project': project,
@@ -2624,7 +2601,7 @@ class ITLingoPortal(CustomerPortal):
 
     def _portal_ws_access(self, project_id):
         """Return (project, user_role) or raise."""
-        project = request.env['itlingo.workspace'].sudo().browse(project_id)
+        project = request.env['itlingo.workspace'].browse(project_id)
         if not project.exists():
             raise MissingError(_('Workspace not found.'))
         user_role = self._portal_workspace_role(request.env.user, project_id)
@@ -2633,18 +2610,19 @@ class ITLingoPortal(CustomerPortal):
         return project, user_role
 
     def _portal_ws_accepted_manager_count(self, project_id):
-        return request.env['itlingo.project.role'].sudo().search_count([
+        return request.env['itlingo.project.role'].search_count([
             ('project_id', '=', project_id),
             ('state', '=', 'accepted'),
             ('role', '=', 'ws_manager'),
         ])
 
     def _portal_workspace_hub_members(self, project_id):
-        """Accepted workspace roles; never None (templates may use len(members))."""
-        return request.env['itlingo.project.role'].sudo().search([
+        """Accepted workspace roles; never None (templates may use len(members)).
+        Rows come from the rule-filtered search; sudo is for the user names."""
+        return request.env['itlingo.project.role'].search([
             ('project_id', '=', project_id),
             ('state', '=', 'accepted'),
-        ])
+        ]).sudo()
 
     def _portal_ws_stats_cards(self, project, hub_prefix, public_hub=False,
                                published_only=False):
@@ -2653,7 +2631,10 @@ class ITLingoPortal(CustomerPortal):
         palette = self._STATS_PALETTE
         cards = []
 
-        Document = request.env['itlingo.document'].sudo()
+        # The public hub serves anonymous visitors (published documents only).
+        Document = request.env['itlingo.document']
+        if public_hub:
+            Document = Document.sudo()
         doc_dom = [('project_id', '=', project.id)]
         if public_hub or published_only:
             doc_dom.append(('status', '=', 'published'))
@@ -2671,7 +2652,8 @@ class ITLingoPortal(CustomerPortal):
         doc_dsl_rows = [
             {
                 'label': (
-                    f'{family.acronym} - {family.name}'.strip(' -')
+                    # Label only: a referenced DSL family can be archived.
+                    f'{family.sudo().acronym} - {family.sudo().name}'.strip(' -')
                     if family else 'No DSL'
                 ),
                 'count': count,
@@ -2698,7 +2680,7 @@ class ITLingoPortal(CustomerPortal):
 
         # The public hub has no users page, so the Users card is members-only.
         if not public_hub:
-            WsRole = request.env['itlingo.project.role'].sudo()
+            WsRole = request.env['itlingo.project.role']
             role_dom = [('project_id', '=', project.id), ('state', '=', 'accepted')]
             role_counts = dict(WsRole._read_group(
                 role_dom, groupby=['role'], aggregates=['__count'],
@@ -2733,7 +2715,8 @@ class ITLingoPortal(CustomerPortal):
 
         values = self._prepare_portal_layout_values()
         values.update({
-            'project': project,
+            # Display only (creator name); access was checked above.
+            'project': project.sudo(),
             'user_role': user_role,
             'workspace_hub': True,
             'workspace_hub_page': 'home',
@@ -2757,7 +2740,7 @@ class ITLingoPortal(CustomerPortal):
         project, user_role = self._portal_ws_access(project_id)
         params = request.params
         base_url = f'/my/workspaces/{project_id}/users'
-        WsRole = request.env['itlingo.project.role'].sudo()
+        WsRole = request.env['itlingo.project.role']
 
         domain = [
             ('project_id', '=', project_id),
@@ -2766,9 +2749,7 @@ class ITLingoPortal(CustomerPortal):
         url_args = {}
         name_q = (params.get('name') or '').strip()
         if name_q:
-            domain += ['|',
-                       ('user_id.name', 'ilike', f'%{name_q}%'),
-                       ('user_id.login', 'ilike', f'%{name_q}%')]
+            domain.append(('user_id', 'in', self._portal_user_ids_matching(name_q)))
             url_args['name'] = name_q
         role_keys = [
             key for key in self._WS_ROLE_FILTER_KEYS
@@ -2804,7 +2785,8 @@ class ITLingoPortal(CustomerPortal):
         values.update({
             'project': project,
             'user_role': user_role,
-            'members': members,
+            # Display only (user names); rows come from the rule-filtered search.
+            'members': members.sudo(),
             'member_count': member_count,
             'pager': page_detail,
             'users_filters': {
@@ -2851,7 +2833,7 @@ class ITLingoPortal(CustomerPortal):
         if actor_role.role != 'ws_manager':
             raise AccessError(_('Only workspace managers can invite members.'))
         to_users = post.get('redirect_users') == '1'
-        email = (post.get('email') or '').strip()
+        email = email_normalize(post.get('email') or '')
         role_key = post.get('role') or 'ws_member'
         allowed_roles = {'ws_manager', 'doc_manager', 'ws_member'}
         if role_key not in allowed_roles:
@@ -2866,66 +2848,11 @@ class ITLingoPortal(CustomerPortal):
             return request.redirect(
                 f'/my/workspaces/{project_id}?error=invite_email_required',
             )
-        Users = request.env['res.users'].sudo()
-        invitee = Users.search([('login', '=', email)], limit=1)
-        if not invitee:
-            invitee = Users.search([('login', '=ilike', email)], limit=1)
-        if not invitee:
-            invitee = Users.search([('email', '=ilike', email)], limit=1)
-        if not invitee:
-            Pending = request.env['itlingo.pending.invitation'].sudo()
-            already_pending = Pending.search([
-                ('email', '=ilike', email),
-                ('project_id', '=', project_id),
-            ], limit=1)
-            if already_pending:
-                self._send_signup_invitation_email(email)
-                if to_users:
-                    return self._portal_ws_user_redirect(project_id, message='invite_resent')
-                return request.redirect(
-                    f'/my/workspaces/{project_id}?message=invite_resent',
-                )
-            partner = request.env['res.partner'].sudo().search(
-                [('email', '=ilike', email)], limit=1,
-            )
-            if not partner:
-                partner = request.env['res.partner'].sudo().create({
-                    'name': email.split('@')[0],
-                    'email': email,
-                })
-            Pending.create({
-                'email': email,
-                'project_id': project_id,
-                'role': role_key,
-                'invited_by_id': request.env.user.id,
-            })
-            self._send_signup_invitation_email(email)
-            if to_users:
-                return self._portal_ws_user_redirect(project_id, message='invite_sent')
-            return request.redirect(
-                f'/my/workspaces/{project_id}?message=invite_sent',
-            )
-        WsRole = request.env['itlingo.project.role'].sudo()
-        existing = WsRole.search([
-            ('project_id', '=', project_id),
-            ('user_id', '=', invitee.id),
-        ], limit=1)
-        if existing:
-            if to_users:
-                return self._portal_ws_user_redirect(project_id, error='invite_already_member')
-            return request.redirect(
-                f'/my/workspaces/{project_id}?error=invite_already_member',
-            )
-        WsRole.create({
-            'project_id': project_id,
-            'user_id': invitee.id,
-            'role': role_key,
-            'state': 'pending',
-        })
+        message = self._portal_send_invitation(email, role_key, {'project_id': project_id})
         if to_users:
-            return self._portal_ws_user_redirect(project_id, message='invite_sent')
+            return self._portal_ws_user_redirect(project_id, message=message)
         return request.redirect(
-            f'/my/workspaces/{project_id}?message=invite_sent',
+            f'/my/workspaces/{project_id}?message={message}',
         )
 
     @route(
@@ -2937,9 +2864,10 @@ class ITLingoPortal(CustomerPortal):
         if actor_role.role != 'ws_manager':
             raise AccessError(_('Only workspace managers can change roles.'))
         to_users = post.get('redirect_users') == '1'
-        WsRole = request.env['itlingo.project.role'].sudo()
-        target = WsRole.browse(role_id)
-        if not target.exists() or target.project_id.id != project_id:
+        target = request.env['itlingo.project.role'].search([
+            ('id', '=', role_id), ('project_id', '=', project_id),
+        ])
+        if not target:
             raise MissingError(_('Member not found.'))
         if target.state != 'accepted':
             if to_users:
@@ -2979,9 +2907,10 @@ class ITLingoPortal(CustomerPortal):
         if actor_role.role != 'ws_manager':
             raise AccessError(_('Only workspace managers can remove members.'))
         to_users = post.get('redirect_users') == '1'
-        WsRole = request.env['itlingo.project.role'].sudo()
-        target = WsRole.browse(role_id)
-        if not target.exists() or target.project_id.id != project_id:
+        target = request.env['itlingo.project.role'].search([
+            ('id', '=', role_id), ('project_id', '=', project_id),
+        ])
+        if not target:
             raise MissingError(_('Member not found.'))
         if target.state != 'accepted':
             if to_users:
@@ -3016,14 +2945,14 @@ class ITLingoPortal(CustomerPortal):
     )
     def portal_workspace_leave(self, project_id, **post):
         project, user_role = self._portal_ws_access(project_id)
-        WsRole = request.env['itlingo.project.role'].sudo()
+        WsRole = request.env['itlingo.project.role']
         accepted = WsRole.search([
             ('project_id', '=', project_id),
             ('state', '=', 'accepted'),
         ])
         if len(accepted) <= 1:
             try:
-                project.sudo().unlink()
+                project.unlink()
             except UserError:
                 return self._portal_ws_user_redirect(project_id, error='leave_failed')
             return request.redirect('/my/workspaces?message=ws_deleted_self_leave')
@@ -3044,7 +2973,7 @@ class ITLingoPortal(CustomerPortal):
         project, user_role = self._portal_ws_access(project_id)
         if user_role.role != 'ws_manager':
             return request.redirect(f'/my/workspaces/{project_id}/users')
-        WsRole = request.env['itlingo.project.role'].sudo()
+        WsRole = request.env['itlingo.project.role']
         candidates = WsRole.search([
             ('project_id', '=', project_id),
             ('state', '=', 'accepted'),
@@ -3056,7 +2985,8 @@ class ITLingoPortal(CustomerPortal):
         values.update({
             'project': project,
             'user_role': user_role,
-            'candidates': candidates,
+            # Display only: the user's name is not readable by portal users.
+            'candidates': candidates.sudo(),
             'workspace_hub': True,
             'workspace_hub_page': 'users',
             'page_name': 'workspace_leave_promote',
@@ -3109,6 +3039,7 @@ class ITLingoPortal(CustomerPortal):
                 params,
                 page_url=f'{base_url}/organization',
                 page=organization_page,
+                sudo_read=True,
             )
         values = self._prepare_portal_layout_values()
         values.update({
@@ -3148,7 +3079,7 @@ class ITLingoPortal(CustomerPortal):
             raise AccessError(
                 _('Only workspace managers or document managers can add documents.'),
             )
-        DocType = request.env['itlingo.document.type'].sudo()
+        DocType = request.env['itlingo.document.type']
         doc_types = DocType.search([], order='name')
         values = self._prepare_portal_layout_values()
         values.update({
@@ -3196,7 +3127,8 @@ class ITLingoPortal(CustomerPortal):
                         **self._portal_document_meta_vals(post),
                     }
                     self._apply_template_vals(doc_vals, post)
-                    request.env['itlingo.document'].sudo().create(doc_vals)
+                    with request.env.cr.savepoint():
+                        request.env['itlingo.document'].create(doc_vals)
                 except (UserError, ValidationError) as err:
                     values['error']['_form'] = str(err)
                 else:
@@ -3220,7 +3152,8 @@ class ITLingoPortal(CustomerPortal):
             return request.not_found()
         values = self._prepare_portal_layout_values()
         values.update({
-            'document': document,
+            # Display only (author name); access was checked by the lookup.
+            'document': document.sudo(),
             'document_scope': 'workspace',
             'doc_base_url': f'/my/workspaces/{project_id}/documents',
             'can_edit_document': user_role.role in self._DOC_EDIT_WS_ROLES,
@@ -3272,7 +3205,7 @@ class ITLingoPortal(CustomerPortal):
             raise AccessError(_('You cannot delete this document.'))
         base_url = f'/my/workspaces/{project_id}/documents'
         try:
-            document.sudo().unlink()
+            document.unlink()
         except UserError:
             return request.redirect(f'{base_url}/{document_id}?error=delete_failed')
         return request.redirect(f'{base_url}?message=doc_deleted')
@@ -3302,7 +3235,8 @@ class ITLingoPortal(CustomerPortal):
             return request.not_found()
         values = self._prepare_portal_layout_values()
         values.update({
-            'document': document,
+            # Display only (author name); access was checked by the lookup.
+            'document': document.sudo(),
             'document_scope': 'organization',
             'doc_base_url': (
                 f'/my/workspaces/{project_id}/documents/organization'
@@ -3362,7 +3296,7 @@ class ITLingoPortal(CustomerPortal):
             raise AccessError(_('You cannot delete this document.'))
         base_url = f'/my/workspaces/{project_id}/documents/organization'
         try:
-            document.sudo().unlink()
+            document.with_env(request.env).unlink()
         except UserError:
             return request.redirect(f'{base_url}/{document_id}?error=delete_failed')
         return request.redirect(

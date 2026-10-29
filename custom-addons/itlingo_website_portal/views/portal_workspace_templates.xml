@@ -610,9 +610,6 @@
             <div t-if="ws_error == 'invite_email_required'" class="alert alert-danger" role="alert">
                 Enter an email address to invite.
             </div>
-            <div t-if="ws_error == 'invite_already_member'" class="alert alert-danger" role="alert">
-                This user already has a role in the workspace.
-            </div>
             <div t-if="ws_error == 'invite_bad_role'" class="alert alert-danger" role="alert">
                 Invalid role for invitation.
             </div>

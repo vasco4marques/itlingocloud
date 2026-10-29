@@ -9,6 +9,7 @@ from odoo.addons.itlingo_templating.services.dsl_parser import (
     is_templatable_dsl,
 )
 from odoo.addons.itlingo_templating.services.rendering import template_format
+from odoo.addons.itlingo_dsl.models.itlingo_dsl import context_default_values
 
 TEMPLATE_TYPE_CODE = "template"
 
@@ -185,8 +186,10 @@ class ItlingoDocument(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        # A ``default_document_type_id`` context key also makes a template.
+        context_defaults = context_default_values(self)
         for vals in vals_list:
-            if self._vals_make_template(vals):
+            if self._vals_make_template({**context_defaults, **vals}):
                 vals["dsl_knowledge"] = False
         return super().create(vals_list)
 

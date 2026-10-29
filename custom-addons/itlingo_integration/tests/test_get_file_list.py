@@ -14,7 +14,7 @@ class TestGetFileList(HttpCase):
             cls.env,
             login="itoi_file_list_user",
             password="itoi_file_list_user",
-            groups="base.group_user",
+            groups="base.group_portal",
         )
         cls.settings = (
             cls.env["itlingo.integration.settings"].sudo()._get_settings()
@@ -33,7 +33,13 @@ class TestGetFileList(HttpCase):
         cls.env["itlingo.project.role"].create({
             "user_id": cls.source_user.id,
             "project_id": cls.workspace.id,
-            "role": "ws_member",
+            "role": "doc_manager",
+            "state": "accepted",
+        })
+        cls.env["itlingo.organization.role"].create({
+            "user_id": cls.source_user.id,
+            "organization_id": cls.organization.id,
+            "role": "doc_manager",
             "state": "accepted",
         })
         doc_type = cls.env.ref("itlingo_core.doc_type_specification")
@@ -53,10 +59,9 @@ class TestGetFileList(HttpCase):
         })
 
     def _authorization_headers(self):
-        iv, ciphertext = self.settings._aes_encrypt(json.dumps({
-            "user": self.source_user.login,
-            "wsid": self.workspace.id,
-        }))
+        iv, ciphertext = self.env[
+            "itlingo.integration.token"
+        ]._issue_launch_token(self.source_user, self.workspace, False)
         return {"Authorization": "Bearer %s:%s" % (iv, ciphertext)}
 
     def test_get_file_list_includes_titles_and_scopes(self):

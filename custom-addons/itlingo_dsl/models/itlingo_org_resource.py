@@ -78,6 +78,14 @@ class ItlingoOrgResource(models.Model):
         default=True,
     )
 
+    def write(self, vals):
+        result = super().write(vals)
+        if "organization_id" in vals:
+            # Rules checked the old organization; the new one must allow
+            # modification too, so resources cannot be moved across orgs.
+            self.check_access("write")
+        return result
+
     @api.constrains("dsl_id", "resource_kind")
     def _check_dsl_required_for_kind(self):
         for resource in self:

@@ -1,4 +1,7 @@
-from odoo import api, fields, models
+from odoo import api, fields, models, _
+from odoo.exceptions import AccessError
+
+from odoo.addons.itlingo_core.organizations.models.itlingo_organization import _is_itlingo_admin
 
 
 class ItlingoNotification(models.Model):
@@ -41,13 +44,29 @@ class ItlingoNotification(models.Model):
             return None
         role = self.env[self.res_model].sudo().browse(self.res_id)
         if role.exists() and role.user_id.id == self.user_id.id:
-            return role
+            # Caller's environment: the role's own actor checks then apply.
+            return role.sudo(self.env.su)
         return None
 
     def _is_pending_invitation(self):
         self.ensure_one()
         role = self._linked_invitation_role()
         return bool(role and role.state == 'pending')
+
+    # Recipients only flip the read flag; title, body, link and recipient
+    # come from the system (``_notify``).
+    _RECIPIENT_FIELDS = frozenset({'is_read', 'read_date'})
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        if not _is_itlingo_admin(self.env):
+            raise AccessError(_('Notifications are created by the system.'))
+        return super().create(vals_list)
+
+    def write(self, vals):
+        if not _is_itlingo_admin(self.env) and set(vals) - self._RECIPIENT_FIELDS:
+            raise AccessError(_('Only the read state of a notification can change.'))
+        return super().write(vals)
 
     def action_mark_read(self):
         self.filtered(lambda n: not n.is_read).write({

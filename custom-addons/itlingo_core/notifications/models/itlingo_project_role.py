@@ -12,7 +12,9 @@ class ItlingoProjectRole(models.Model):
             'itlingo_core.mail_template_itlingo_invitation',
             raise_if_not_found=False,
         )
-        for role in records:
+        # System notification: the invitee's address and the template are
+        # not readable by the inviting manager.
+        for role in records.sudo():
             if role.state != 'pending':
                 continue
             role_label = dict(role._fields['role'].selection).get(role.role, role.role)
@@ -31,13 +33,13 @@ class ItlingoProjectRole(models.Model):
                 res_id=role.id,
             )
             if template and role.user_id.email:
-                template.send_mail(notif.id, force_send=False)
+                template.sudo().send_mail(notif.id, force_send=False)
         return records
 
     def action_accept(self):
         res = super().action_accept()
         Notif = self.env['itlingo.notification']
-        for role in self:
+        for role in self.sudo():
             managers = role.project_id.workspace_role_ids.filtered(
                 lambda r: r.role == 'ws_manager' and r.state == 'accepted'
             ).mapped('user_id')
@@ -55,7 +57,7 @@ class ItlingoProjectRole(models.Model):
     def action_reject(self):
         res = super().action_reject()
         Notif = self.env['itlingo.notification']
-        for role in self:
+        for role in self.sudo():
             managers = role.project_id.workspace_role_ids.filtered(
                 lambda r: r.role == 'ws_manager' and r.state == 'accepted'
             ).mapped('user_id')

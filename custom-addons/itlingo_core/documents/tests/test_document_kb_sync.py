@@ -3,8 +3,8 @@ import unittest
 
 from psycopg2 import IntegrityError
 
-from odoo.exceptions import ValidationError
-from odoo.tests.common import TransactionCase, tagged
+from odoo.exceptions import AccessError, ValidationError
+from odoo.tests.common import TransactionCase, new_test_user, tagged
 
 
 @tagged('post_install', '-at_install')
@@ -107,3 +107,34 @@ class TestDocumentKbSync(TransactionCase):
                 'status': 'published',
                 'dsl_knowledge': True,
             })
+
+    def test_refused_unlink_keeps_document_and_kb_file(self):
+        doc = self.env['itlingo.document'].create({
+            'name': 'Protected Grounding Source',
+            'document_type_id': self.doc_type.id,
+            'project_id': self.workspace.id,
+            'file_name': 'protected_source.txt',
+            'document_file': base64.b64encode(b'Glossary term: system'),
+            'status': 'published',
+            'dsl_knowledge': True,
+        })
+        member = new_test_user(
+            self.env, login='kb_unlink_member',
+            groups='base.group_portal,itlingo_core.group_itlingo_member',
+        )
+        self.env['itlingo.project.role'].create({
+            'project_id': self.workspace.id, 'user_id': member.id,
+            'role': 'ws_member', 'state': 'accepted',
+        })
+        source_url = 'odoo://itlingo.document/%s' % doc.id
+        try:
+            doc.with_user(member).unlink()
+        except AccessError:
+            pass  # the portal catches errors the same way
+        else:
+            self.fail('A plain workspace member deleted a document.')
+        self.env.invalidate_all()
+        self.assertTrue(doc.exists())
+        self.assertEqual(len(self.KBFile.search([
+            ('file_type', '=', 'other'), ('source_url', '=', source_url),
+        ])), 1)
