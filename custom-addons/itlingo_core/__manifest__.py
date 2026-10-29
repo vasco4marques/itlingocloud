@@ -1,6 +1,6 @@
 {
     'name': 'ITLingo Core',
-    'version': '19.0.3.2.0',
+    'version': '19.0.3.3.0',
     'category': 'Services',
     'summary': 'Organizations, workspaces, documents and notifications for ITLingo Cloud',
     'description': """

@@ -5,7 +5,10 @@ from urllib.parse import parse_qs, urlparse
 
 from odoo import fields
 from odoo.exceptions import AccessError, UserError
+from odoo.modules.module import load_script
 from odoo.tests import HttpCase, new_test_user, tagged
+from odoo.tools.convert import convert_file
+from odoo.tools.misc import file_path
 
 
 @tagged("post_install", "-at_install")
@@ -486,3 +489,83 @@ class TestTokenSecurity(HttpCase):
             token.with_user(self.outsider).action_revoke()
         token.with_user(self.admin).action_revoke()
         self.assertFalse(token.is_active)
+
+    def test_upgrade_refreshes_stale_noupdate_token_rule(self):
+        """19.0.1.6.0 on the copied production state: the own-token rule is
+        noupdate with ``base.group_user`` only, so portal/member users have
+        no token rule and read every token."""
+        env = self.env(su=True)
+        rule = env.ref("itlingo_integration.itlingo_token_rule_own")
+        rule_id = rule.id
+        portal = env.ref("base.group_portal")
+        member_group = env.ref("itlingo_core.group_itlingo_member")
+        domain = "[('user_id', '=', user.id)]"
+        rule.write({"groups": [(6, 0, env.ref("base.group_user").ids)]})
+        env.flush_all()
+        self.env.cr.execute(
+            "UPDATE ir_model_data SET noupdate = TRUE"
+            " WHERE module = 'itlingo_integration' AND name = 'itlingo_token_rule_own'")
+        env.invalidate_all()
+
+        member = new_test_user(
+            self.env, login="itoi_rule_member",
+            groups="base.group_portal,itlingo_core.group_itlingo_member")
+        own = self.Token.sudo().create({"user_id": member.id})
+        foreign = self.Token.sudo().create({"user_id": self.outsider.id})
+        tokens = own | foreign
+        Token = self.Token.with_user(member)
+        visible = lambda: Token.search([("id", "in", tokens.ids)])  # noqa: E731
+        self.assertEqual(visible(), tokens)  # the old leak
+
+        def load_rule_file():
+            convert_file(env, "itlingo_integration",
+                         "security/itlingo_integration_rules.xml", {}, "update")
+            env.invalidate_all()
+
+        load_rule_file()  # the noupdate="0" wrapper alone does not refresh it
+        self.assertEqual(rule.groups, env.ref("base.group_user"))
+
+        pre = load_script(
+            file_path("itlingo_integration/migrations/19.0.1.6.0/pre-migrate.py"),
+            "itlingo_integration_test_rule_pre_migrate")
+        pre.migrate(self.env.cr, "19.0.1.5.0")
+        load_rule_file()
+
+        self.assertEqual(env.ref("itlingo_integration.itlingo_token_rule_own").id, rule_id)
+        self.assertEqual(rule.groups, member_group | portal)  # obsolete group removed
+        self.assertEqual(rule.domain_force, domain)
+        self.assertTrue(rule.active)
+        self.assertEqual(
+            (rule.perm_read, rule.perm_write, rule.perm_create, rule.perm_unlink),
+            (True, True, True, True))
+        self.assertFalse(env["ir.model.data"].search([
+            ("module", "=", "itlingo_integration"), ("model", "=", "ir.rule"),
+            ("noupdate", "=", True)]))
+
+        # Own tokens: read, change and create; other users' tokens: no access.
+        self.assertEqual(visible(), own)
+        own.with_user(member).write({"description": "mine"})
+        self.assertEqual(own.description, "mine")
+        self.assertEqual(Token.create({}).user_id, member)
+        with self.assertRaises(AccessError):
+            foreign.with_user(member).read(["description"])
+        with self.assertRaises(AccessError):
+            foreign.with_user(member).write({"description": "hijack"})
+        with self.assertRaises(AccessError):
+            foreign.with_user(member).action_revoke()
+        self.assertTrue(foreign.is_active)
+        self.assertFalse(foreign.description)
+
+        # Platform admins still manage every user's token.
+        admin_rule = env.ref("itlingo_integration.itlingo_token_rule_admin")
+        self.assertEqual(admin_rule.groups, env.ref("itlingo_core.group_itlingo_admin"))
+        self.assertEqual(admin_rule.domain_force, "[(1, '=', 1)]")
+        self.assertFalse(member.has_group("itlingo_core.group_itlingo_admin"))
+        AdminToken = self.Token.with_user(self.admin)
+        self.assertEqual(AdminToken.search([("id", "in", tokens.ids)]), tokens)
+        foreign.with_user(self.admin).write({"description": "admin note"})
+        self.assertEqual(foreign.description, "admin note")
+        foreign.with_user(self.admin).action_revoke()
+        self.assertFalse(foreign.is_active)
+        foreign.with_user(self.admin).unlink()
+        self.assertFalse(foreign.exists())

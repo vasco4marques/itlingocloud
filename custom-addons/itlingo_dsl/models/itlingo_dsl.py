@@ -425,12 +425,18 @@ class ItlingoDsl(models.Model):
 
     @api.model
     def _refresh_document_formats(self):
-        """Recompute stored formats after the registered extensions change."""
+        """Recompute stored formats after the registered extensions change.
+
+        The ORM recompute writes only the documents whose format changes
+        (``Field.write`` skips cached equal values), so unaffected documents
+        keep their ``write_date``/``write_uid``.
+        """
         documents = self.env["itlingo.document"].sudo().search(
             [("file_name", "!=", False)]
         )
         if documents:
-            documents._compute_document_format()
+            documents.fetch(["document_format"])  # cache old values to compare
+            self.env.add_to_compute(documents._fields["document_format"], documents)
             documents.flush_recordset(["document_format"])
 
     # ------------------------------------------------------------------

@@ -7,14 +7,19 @@
         <field name="name">ITLingo Token: own tokens only</field>
         <field name="model_id" ref="model_itlingo_integration_token"/>
         <field name="domain_force">[('user_id', '=', user.id)]</field>
-        <field name="groups" eval="[(4, ref('itlingo_core.group_itlingo_member')), (4, ref('base.group_portal'))]"/>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_member'), ref('base.group_portal')])]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+        <field name="active" eval="True"/>
     </record>
 
     <record id="itlingo_token_rule_admin" model="ir.rule">
         <field name="name">ITLingo Token: admin sees all</field>
         <field name="model_id" ref="model_itlingo_integration_token"/>
         <field name="domain_force">[(1, '=', 1)]</field>
-        <field name="groups" eval="[(4, ref('itlingo_core.group_itlingo_admin'))]"/>
+        <field name="groups" eval="[(6, 0, [ref('itlingo_core.group_itlingo_admin')])]"/>
     </record>
 
 </data>

@@ -1,7 +1,8 @@
 import json
+from contextlib import contextmanager
 from datetime import timedelta
 
-from odoo import api, fields, models, _
+from odoo import SUPERUSER_ID, api, fields, models, _
 from odoo.exceptions import AccessError, UserError
 
 # Issued by the server only: clients may neither supply nor change them.
@@ -184,6 +185,40 @@ class ItlingoIntegrationToken(models.Model):
             'description': 'ITOI public launch' if public else 'ITOI launch',
         })
         return iv_b64, ct_b64
+
+    @contextmanager
+    def _committed_launch_token(self, user, project, write):
+        """Yield ``(iv, ct)`` of a launch token for a server-to-server call
+        made during the current request (chatbot export -> ITOI /pushFile).
+
+        ITOI revalidates the token through ``/token_api/validate-launch`` on
+        another database connection, which cannot see rows of the still-open
+        request transaction. Only the token row is therefore committed, in
+        its own transaction; the caller's business writes stay in the
+        request transaction. The token is revoked, again in its own
+        transaction, when the block exits for any reason, so it is valid
+        only during the call and never outlives a rolled-back request.
+
+        Each cursor gets a superuser environment that is flushed before the
+        commit: an ``auth='none'`` request has no uid, and the commit of
+        such an environment's cursor does not flush its pending writes.
+        """
+        with self.env.registry.cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            iv_b64, ct_b64 = self.with_env(env)._issue_launch_token(
+                user, project, write)
+            env.flush_all()
+        try:
+            yield iv_b64, ct_b64
+        finally:
+            with self.env.registry.cursor() as cr:
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                self.with_env(env).search([
+                    ('token_iv', '=', iv_b64),
+                    ('token_ct', '=', ct_b64),
+                    ('token_kind', '=', 'launch'),
+                ]).write({'is_active': False})
+                env.flush_all()
 
     # ------------------------------------------------------------------
     # Validation

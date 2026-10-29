@@ -102,6 +102,38 @@ class TestDocumentFormat(TransactionCase):
         dsl.unlink()
         self.assertEqual(document.document_format, 'other')
 
+    def test_publishing_dsl_keeps_unaffected_document_metadata(self):
+        dsl = self.env['itlingo.dsl'].create({
+            'name': 'Metadata Format Test',
+            'acronym': 'MFT',
+            'version': 'test-1',
+            'status': 'draft',
+            'file_extensions': '.metaformat',
+        })
+        affected, word, text = self.env['itlingo.document'].create([
+            {'name': 'Metadata Affected', 'file_name': 'source.metaformat'},
+            {'name': 'Metadata Word', 'file_name': 'report.docx'},
+            {'name': 'Metadata Text', 'file_name': 'notes.md'},
+        ])
+        docs = affected | word | text
+        admin = self.env.ref('base.user_admin')
+        self.env.flush_all()
+        self.env.cr.execute(
+            "UPDATE itlingo_document SET write_date = '2020-01-01 00:00:00', write_uid = %s WHERE id IN %s",
+            [admin.id, tuple(docs.ids)])
+        self.env.invalidate_all()
+        self.assertEqual(docs.mapped('document_format'), ['other', 'word', 'text'])
+
+        dsl.with_context(allow_dsl_lifecycle_write=True).write({'status': 'active'})
+        self.env.flush_all()
+        self.env.invalidate_all()
+
+        self.assertEqual(docs.mapped('document_format'), ['text', 'word', 'text'])
+        for doc in word | text:
+            self.assertEqual(str(doc.write_date), '2020-01-01 00:00:00')
+            self.assertEqual(doc.write_uid, admin)
+        self.assertNotEqual(str(affected.write_date), '2020-01-01 00:00:00')
+
 
 @tagged('post_install', '-at_install')
 class TestDslDocumentKbSync(TransactionCase):

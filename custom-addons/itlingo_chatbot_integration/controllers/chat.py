@@ -298,21 +298,21 @@ class ChatController(http.Controller):
                 'not_configured', 'ITOI URL is not configured in the integration settings')
 
         try:
-            # Persisted like every ITOI launch token; the caller already
+            # ITOI validates the token on its own connection while this
+            # request is still open, so the token is committed apart from the
+            # export and revoked once the push returns. The caller already
             # verified the user's accepted write role on the workspace.
-            iv_b64, ct_b64 = request.env[
-                'itlingo.integration.token'
-            ]._issue_launch_token(user, project, True)
-
-            resp = http_requests.post(
-                f'{itoi_url}/pushFile',
-                headers={'Authorization': f'Bearer {iv_b64}:{ct_b64}'},
-                json={
-                    'filename': filename,
-                    'content': base64.b64encode(content.encode('utf-8')).decode('ascii'),
-                },
-                timeout=ITOI_PUSH_TIMEOUT_S,
-            )
+            with request.env['itlingo.integration.token']._committed_launch_token(
+                    user, project, True) as (iv_b64, ct_b64):
+                resp = http_requests.post(
+                    f'{itoi_url}/pushFile',
+                    headers={'Authorization': f'Bearer {iv_b64}:{ct_b64}'},
+                    json={
+                        'filename': filename,
+                        'content': base64.b64encode(content.encode('utf-8')).decode('ascii'),
+                    },
+                    timeout=ITOI_PUSH_TIMEOUT_S,
+                )
         except http_requests.exceptions.Timeout:
             _logger.warning('ITOI pushFile timed out after %ss', ITOI_PUSH_TIMEOUT_S)
             return self._itoi_failure(

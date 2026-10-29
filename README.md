@@ -128,7 +128,7 @@ The projects API no longer returns `methodology`. Current ITOI and chatbot code 
 
 ### Permission changes
 
-Back up the database and filestore before the module update to core version `19.0.3.2.0`.
+Back up the database and filestore before the module update to core version `19.0.3.3.0`. Use the update command in "Logs and module updates". Do not uninstall a module to get the new access rules.
 
 Access rules after this update:
 
@@ -143,6 +143,8 @@ The migration changes existing data as follows:
 - Old pending organization and workspace roles now require mailbox proof. Old pending invitations cannot be claimed at signup. Send these invitations again.
 - It deletes pending invitations to workspaces that do not exist.
 - Old ITOI launch tokens that the server did not record do not open a session. Users must launch ITOI again from the portal.
+- Version `19.0.3.3.0` refreshes the existing ITLingo Core record rules. Older databases marked these rules as not updatable, so they kept old domains, groups, and permissions. The migration removes that mark before Odoo loads the rule files. Odoo then writes the current domain, groups, and permissions into each rule and keeps its record ID. Odoo deletes old ITLingo Core rules that the module no longer declares. The migration does not delete or change organizations, workspaces, roles, documents, or attachments.
+- ITLingo Integration version `19.0.1.6.0` refreshes the integration token rules in the same way. On older databases, the own-token rule applied only to internal users, so portal users could read the tokens of other users. After the update, portal and ITLingo Member users read and change only their own tokens. The update replaces the old rule groups and does not change tokens.
 
 Invitation mail uses the Odoo signup links. Before you send invitations, configure these items:
 

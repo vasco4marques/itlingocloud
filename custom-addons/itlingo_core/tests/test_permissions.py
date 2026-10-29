@@ -1,6 +1,7 @@
 from odoo.exceptions import AccessError, UserError
 from odoo.modules.module import load_script
 from odoo.tests import TransactionCase, new_test_user, tagged
+from odoo.tools.convert import convert_file
 from odoo.tools.misc import file_path
 
 PORTAL = 'base.group_portal,itlingo_core.group_itlingo_member'
@@ -370,3 +371,87 @@ class TestCorePermissions(TransactionCase):
         self.assertEqual(self.ws_role_member.role, 'ws_manager')  # kept for review
         if creator_row:
             self.assertEqual(creator_row.grant_source, 'explicit')
+
+    def test_upgrade_refreshes_stale_noupdate_rules(self):
+        """19.0.3.3.0 on a database that kept the old noupdate rules (copied
+        production state: old domains, one group each, all four permissions)."""
+        env = self.env(su=True)
+        own_org = "[('role_ids.user_id', '=', user.id), ('role_ids.state', '=', 'accepted')]"
+        org_roles = ("[('organization_id.role_ids.user_id', '=', user.id), "
+                     "('organization_id.role_ids.state', '=', 'accepted')]")
+        ws_roles = ("[('project_id.workspace_role_ids.user_id', '=', user.id), "
+                    "('project_id.workspace_role_ids.state', '=', 'accepted')]")
+        own_docs = ("['|', '&', ('project_id.workspace_role_ids.user_id', '=', user.id), "
+                    "('project_id.workspace_role_ids.state', '=', 'accepted'), "
+                    "'&', ('organization_id.role_ids.user_id', '=', user.id), "
+                    "('organization_id.role_ids.state', '=', 'accepted')]")
+        stale = {
+            'itlingo_organization_rule_member': own_org,
+            'itlingo_organization_rule_portal': own_org,
+            'itlingo_organization_role_rule_member': org_roles,
+            'itlingo_organization_role_rule_portal': "['|', ('user_id', '=', user.id), '&', " + org_roles[1:],
+            'itlingo_project_role_rule_member': ws_roles,
+            'itlingo_project_role_rule_portal': "['|', ('user_id', '=', user.id), '&', " + ws_roles[1:],
+            'itlingo_document_rule_member': own_docs,
+            'itlingo_document_rule_portal': own_docs,
+        }
+        member_group = env.ref('itlingo_core.group_itlingo_member')
+        portal_group = env.ref('base.group_portal')
+        rules = {}
+        for name, domain in stale.items():
+            rule = rules[name] = env.ref(f'itlingo_core.{name}')
+            group = member_group if name.endswith('_member') else portal_group
+            rule.write({'domain_force': domain, 'groups': [(6, 0, group.ids)], 'perm_read': True,
+                        'perm_write': True, 'perm_create': True, 'perm_unlink': True})
+        env.flush_all()
+        self.env.cr.execute(
+            "UPDATE ir_model_data SET noupdate = TRUE WHERE module = 'itlingo_core' AND name IN %s",
+            [tuple(stale)])
+        env.invalidate_all()
+        self.assertIn(self.draft_doc, self._visible(self.member, self.draft_doc))  # the old leak
+
+        def load_rule_files():
+            for path in ('organizations/security/itlingo_organization_rules.xml',
+                         'workspaces/security/itlingo_workspace_rules.xml',
+                         'documents/security/itlingo_document_rules.xml'):
+                convert_file(env, 'itlingo_core', path, {}, 'update')
+            env.invalidate_all()
+
+        # The noupdate="0" wrapper alone does not refresh them.
+        load_rule_files()
+        self.assertEqual(rules['itlingo_document_rule_member'].domain_force, own_docs)
+
+        pre = load_script(file_path('itlingo_core/migrations/19.0.3.3.0/pre-migrate.py'),
+                          'itlingo_core_test_rule_pre_migrate')
+        pre.migrate(self.env.cr, '19.0.3.2.0')
+        load_rule_files()
+
+        for name, rule in rules.items():
+            self.assertEqual(env.ref(f'itlingo_core.{name}'), rule)  # stable record ID
+            self.assertNotEqual(rule.domain_force, stale[name])
+            self.assertEqual(rule.groups, member_group | portal_group)
+            self.assertNotEqual((rule.perm_read, rule.perm_write, rule.perm_create, rule.perm_unlink),
+                                (True,) * 4)
+        self.env.cr.execute(
+            "SELECT bool_or(noupdate) FROM ir_model_data WHERE module = 'itlingo_core' AND name IN %s",
+            [tuple(stale)])
+        self.assertFalse(self.env.cr.fetchone()[0])
+
+        # Members cannot self-promote or read drafts; business rows are unchanged.
+        self.assertFalse(self._visible(self.member, self.draft_doc))
+        self.assertEqual(self._visible(self.member, self.published_doc), self.published_doc)
+        with self.assertRaises(AccessError):
+            self._as(self.member, self.role_member).write({'role': 'org_manager'})
+        with self.assertRaises(AccessError):
+            self._as(self.member, self.ws_role_member).write({'role': 'ws_manager'})
+        with self.assertRaises(AccessError):
+            self.env['itlingo.project.role'].with_user(self.member).create({
+                'project_id': self.ws.id, 'user_id': self.member.id, 'role': 'ws_manager'})
+        self.assertEqual((self.role_member.role, self.ws_role_member.role), ('org_member', 'ws_member'))
+
+        # The authorized manager still works.
+        self.assertEqual(self._visible(self.manager, self.draft_doc), self.draft_doc)
+        self._as(self.manager, self.org).write({'name': 'Perm Org After Upgrade'})
+        invite = self.env['itlingo.organization.role'].with_user(self.manager).create({
+            'organization_id': self.org.id, 'user_id': self.outsider.id, 'role': 'org_member'})
+        self.assertEqual(invite.state, 'pending')
