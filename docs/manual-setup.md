@@ -14,12 +14,86 @@ Mail has a separate guide. Refer to [email.md](email.md) for the SMTP relay, the
 
 ## Current host
 
-- The host is a DigitalOcean droplet with Ubuntu 24.04 at `46.101.130.155`. The SSH user `vmarques` is in the `sudo` and `docker` groups. `sudo` asks for a password.
+- The host is a DigitalOcean droplet named `odoo-testing-env` with Ubuntu 24.04 at `46.101.130.155`. The SSH user for operators and deployments is `itlingo-admin`. Refer to [Server access](#server-access).
 - Cloud runs in the container `itlingo-odoo` from `/opt/odoo`.
 - ITOI runs in the containers `itoi-api` and `itoi-db` from `/opt/microservices/itlingo-itoi`.
 - The chatbot runs in the containers `itlingo-chatbot` and `langium-ai-service` from `/opt/microservices/itlingo-chatbot`. The container `itlingo-chatbot-guard` runs from `/opt/microservices/itlingo-chatbot/guard`.
 - PostgreSQL 16 runs on the host, not in Docker. It holds the Cloud database `itlingo_dev` and the chatbot tables.
 - The old systemd service `odoo` is disabled and inactive. `deploy.sh` stops if this service is active.
+
+## Server access
+
+SSH accepts only keys. `/etc/ssh/sshd_config.d/99-itlingo-hardening.conf` sets these values:
+
+- `PasswordAuthentication no` and `KbdInteractiveAuthentication no`.
+- `PermitRootLogin prohibit-password`. Root can log in only with a key. SSH with the root password stays disabled.
+- `AllowUsers itlingo-admin root`. SSH refuses all other users.
+
+### Shared account `itlingo-admin`
+
+- `itlingo-admin` is a general account for the team. It has a home directory, the shell `/bin/bash`, and the groups `sudo` and `docker`. The group `docker` gives root access without a password. `deploy.sh` in Cloud and in ITOI connects as this user.
+- `sudo` asks for the account password. The password is random. Get it from the professor through a password manager. Do not put the password in Git, in chat, or in a file on the host.
+- `/home/itlingo-admin/.ssh/authorized_keys` contains one public key for each team member.
+- A shared account does not show which person did an action. Make an individual account for each team member when possible. Refer to [Add an individual account](#add-an-individual-account).
+
+### Get access as a new team member
+
+The professor owns the DigitalOcean team that contains the droplet. Access to the team and access to Linux are two different permissions:
+
+- The DigitalOcean permission lets you open the Droplet Console. It does not give you SSH access as `itlingo-admin`.
+- A line in `/home/itlingo-admin/.ssh/authorized_keys` gives you SSH access. You do not need the SSH keys page of the DigitalOcean control panel for this line. That page adds keys only to new droplets.
+
+Do these steps:
+
+1. Ask the professor for an invitation to the DigitalOcean team.
+2. Sign in to your DigitalOcean account and accept the invitation.
+3. In the control panel, select the team of the professor. Then go to Droplets > `odoo-testing-env` > Web Console. The droplet has the IP address `46.101.130.155`.
+4. Make sure that your role in the team gives access to the Droplet Console. If you cannot open the console, ask the professor for this permission.
+5. On your own computer, make a key pair with a passphrase:
+
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/itlingo_droplet
+   ```
+
+   The private key stays on your computer. Do not put a private key on the droplet, in Git, or in chat. You use only the public key `~/.ssh/itlingo_droplet.pub`.
+6. Open the droplet and select Access > Launch Droplet Console. The console opens an SSH session as `root`. The service `droplet-agent` adds a temporary key for this session, so the console does not ask for an OS password.
+7. In the console, add your public key as one new line. Use `>>`, not `>`. The `>` operator deletes the keys of the other team members.
+
+   ```bash
+   install -d -m 700 -o itlingo-admin -g itlingo-admin /home/itlingo-admin/.ssh
+   echo '<the full line of your .pub file>' >> /home/itlingo-admin/.ssh/authorized_keys
+   chown itlingo-admin:itlingo-admin /home/itlingo-admin/.ssh /home/itlingo-admin/.ssh/authorized_keys
+   chmod 700 /home/itlingo-admin/.ssh
+   chmod 600 /home/itlingo-admin/.ssh/authorized_keys
+   ```
+
+8. Keep the console open. On your own computer, open a new SSH session:
+
+   ```bash
+   ssh -i ~/.ssh/itlingo_droplet itlingo-admin@46.101.130.155
+   ```
+
+9. In the new session, run `sudo -v`. Type the `itlingo-admin` password.
+10. If steps 8 and 9 are successful, close the console. If they fail, use the console to correct the file before you close it.
+
+To use `deploy.sh` with your key, set `SSH_KEY` in ITOI, or change `SSH_KEY` at the top of the Cloud `deploy.sh` on your computer.
+
+### DigitalOcean consoles
+
+- The Droplet Console (Access > Launch Droplet Console) uses SSH, not an OS password. The service `droplet-agent` adds a temporary key to `~/.ssh/authorized_keys` of the console user. The default console user is `root`.
+- The Droplet Console needs the service `droplet-agent`, inbound SSH on port 22, and outbound access to `169.254.169.254`. On 2026-10-30, `droplet-agent` was active and enabled, and the metadata service replied.
+- The Recovery Console is a different console. It uses the OS password of the user, for example the password of `itlingo-admin`. Use it only when SSH and the Droplet Console fail.
+- Not verified: the console click in the control panel.
+
+### Add an individual account
+
+1. Keep one SSH session open until step 6 is complete.
+2. Create the user with `sudo adduser <name>`. To give root access, run `sudo usermod -aG sudo <name>`.
+3. Put the public key of the person in `/home/<name>/.ssh/authorized_keys`. Set mode `700` on `.ssh` and mode `600` on the file, with owner `<name>`.
+4. Add `<name>` to the `AllowUsers` line in `99-itlingo-hardening.conf`.
+5. Run `sudo sshd -t`. If it shows an error, correct the file before you continue.
+6. Run `sudo systemctl reload ssh`. Open a new session as `<name>`, then close the old session.
+7. When each person has an individual account, remove `itlingo-admin` from `AllowUsers`.
 
 ## 1. DNS
 
@@ -86,7 +160,7 @@ On a new host:
 - The container runs as `110:114` (`user:` in `docker-compose.yml`).
 - `/var/lib/odoo` is owned by `odoo:odoo` with mode `700`. The filestore of `itlingo_dev` is `/var/lib/odoo/filestore/itlingo_dev`.
 - `/opt/odoo` is owned by `odoo:odoo`.
-- `/opt/odoo/.env` has owner `vmarques`, group `odoo`, and mode `640`. It contains `ODOO_TAG`, `DB_USER`, and `DB_PASSWORD`.
+- `/opt/odoo/.env` has owner `itlingo-admin`, group `odoo`, and mode `640`. It contains `ODOO_TAG`, `DB_USER`, and `DB_PASSWORD`.
 - `/opt/odoo/odoo.docker.conf` has owner `root`, group `odoo`, and mode `640`. Compose mounts it read-only in the container. It contains `addons_path`, `data_dir`, `admin_passwd`, `proxy_mode = True`, `http_interface = 127.0.0.1`, `email_from`, and `max_cron_threads = 0`.
 
 Do not print these two files, because they contain secrets. To examine one option, use a filtered command, for example `docker exec itlingo-odoo grep -E '^(proxy_mode|max_cron_threads)' /etc/odoo/odoo.conf`.
@@ -133,7 +207,7 @@ After a reboot, run `docker compose up -d` in `/opt/microservices/itlingo-itoi`.
 
 ## 8. Backups and retention
 
-- No backup job for the databases or the filestore was found. The inspected locations were the systemd timers, `/etc/cron.d`, and the crontab of `vmarques`.
+- No backup job for the databases or the filestore was found. The inspected locations were the systemd timers, `/etc/cron.d`, and the crontab of the former personal account. On 2026-10-30, that account was removed and its files moved to `itlingo-admin`.
 - Not verified: the root crontab and `/opt/incident-recovery`, because only root can read them. Also not verified: DigitalOcean droplet backups and snapshots. Examine the droplet in the DigitalOcean console.
 - `docker-image-retention.timer` runs every night. It keeps the newest tags of each image repository. It never removes an image that a container uses, and it never removes volumes. Refer to [DOCKER_RETENTION.md](../scripts/DOCKER_RETENTION.md).
 - Stopped containers with names `rollback-pin-*` keep earlier images for a rollback. Do not remove these containers. To list them, run `docker ps -a --filter name=rollback-pin`.

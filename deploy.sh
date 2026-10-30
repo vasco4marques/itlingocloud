@@ -11,7 +11,7 @@
 set -euo pipefail
 
 IMAGE=vasco4marques/itlingo-odoo
-SERVER=vmarques@46.101.130.155
+SERVER=itlingo-admin@46.101.130.155
 SSH_KEY=~/.ssh/digital_ocean
 
 cd "$(dirname "$0")"
