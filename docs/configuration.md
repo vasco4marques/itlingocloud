@@ -80,12 +80,14 @@ These keys are in Settings > Technical > System Parameters. That menu requires t
 
 ## Mail and public URL
 
-Invitations and signup links use Odoo mail. Before you send invitations, configure these items:
+Invitations and signup links use Odoo mail. Production already has an outgoing mail server for the Brevo SMTP relay. An administrator configured it manually in the database, so Git does not contain it. Refer to [email.md](email.md) for the values, the setup procedure, and the verification without sending.
 
-- An outgoing mail server, in the Outgoing Mail Servers menu under Settings > Technical. That menu requires the developer mode.
-- A valid email address for the company.
+Each installation needs these items:
+
+- An outgoing mail server, in Settings > Technical > Email > Outgoing Mail Servers. That menu requires the developer mode.
+- A valid email address for the company, and the `email_from` option in the Odoo configuration file.
 - `web.base.url` with the public URL of the installation. The links in the mail use this URL.
 
-Do not configure an outgoing mail server or start the scheduler in production before you read [deployment.md](deployment.md#scheduler-and-outgoing-mail). The production mail queue contains old messages.
+Production runs without the scheduler, and the mail queue contains old messages. Do not start the scheduler or process the queue before you read [deployment.md](deployment.md#scheduler-and-outgoing-mail).
 
 Do not copy production data or a production mail server into a local database. A local Odoo can send the mail that is in the queue of the copied data.

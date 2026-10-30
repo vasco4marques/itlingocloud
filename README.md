@@ -11,6 +11,8 @@ The repository does not contain Odoo source. The Docker image uses the upstream 
 - [Architecture](docs/architecture.md): the modules, their responsibilities, and the boundaries to ITOI and the chatbot.
 - [Workflows](docs/workflows.md): the user operations in the portal and the backend.
 - [Deployment](docs/deployment.md): the production host and the deployment procedure.
+- [Manual host setup](docs/manual-setup.md): the host configuration that `deploy.sh` does not make, for example DNS, nginx, TLS, PostgreSQL, secrets, and the ITOI and chatbot settings.
+- [Email](docs/email.md): the SMTP relay, the sender address, the mail queue, and the mail DNS records.
 - [Upgrades](docs/upgrades.md): migration constraints and data-loss warnings for existing databases.
 
 ## Repository layout

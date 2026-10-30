@@ -16,11 +16,11 @@ Do not run `deploy.sh` to test a local installation. It changes the production s
 
 ## Scheduler and outgoing mail
 
-Production runs without the Odoo scheduler and without outgoing mail. The mail queue contains old messages that Odoo did not send.
+Production runs without the Odoo scheduler. An outgoing SMTP server is configured on production. Refer to [email.md](email.md). The mail queue contains old messages that Odoo did not send. Leave the queue unchanged.
 
-Do not enable the scheduler (`max_cron_threads` above 0) or an outgoing SMTP server on production. If you enable them, Odoo sends the old queued messages. Keep `max_cron_threads = 0` in the production `odoo.docker.conf`. The example file does not set this value, and the Odoo default starts the scheduler.
+Do not enable automatic queue processing (`max_cron_threads` above 0) until the owner reviews the old queued messages. The scheduler sends the queued messages. The SMTP configuration alone does not send them. Keep `max_cron_threads = 0` in the production `odoo.docker.conf`. This value disables the scheduler. The example file does not set this value, and the Odoo default starts the scheduler.
 
-Odoo sends invitation emails immediately, without the scheduler. Without an outgoing mail server record, Odoo uses the `smtp_server` option of `odoo.docker.conf`, and the default is `localhost`. Because the container uses host networking, a mail server on the host can receive these messages. The owner of the server must decide about mail before users can invite members.
+Odoo sends invitation emails immediately, without the scheduler. Without an outgoing mail server record, Odoo uses the `smtp_server` option of `odoo.docker.conf`, and the default is `localhost`. Because the container uses host networking, a mail server on the host can receive these messages. Invitation emails can reach real recipients on production.
 
 ## Before a deployment
 
