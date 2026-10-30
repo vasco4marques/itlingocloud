@@ -5,7 +5,7 @@
 #   ./deploy.sh               build + push + deploy
 #   ./deploy.sh --skip-build  deploy the image for the current git sha (already pushed)
 #
-# Only valid after the Docker cutover (see DEPLOYMENT.md §3.1) — aborts if the
+# Only valid after the Docker cutover — aborts if the
 # old systemd odoo service is still active. Sudo password will be prompted once
 # on the server to install the deployment files and update ODOO_TAG in /opt/odoo/.env.
 set -euo pipefail
@@ -35,7 +35,7 @@ scp -i "$SSH_KEY" Makefile.droplet "$SERVER:/tmp/Makefile.odoo.deploy"
 ssh -i "$SSH_KEY" -t "$SERVER" "
     set -euo pipefail
     if systemctl is-active --quiet odoo; then
-        echo 'odoo.service is still active — this script only applies after the Docker cutover (DEPLOYMENT.md §3.1).' >&2
+        echo 'odoo.service is still active — this script only applies after the Docker cutover.' >&2
         exit 1
     fi
     cd /opt/odoo
